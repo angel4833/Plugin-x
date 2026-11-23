@@ -1,0 +1,24 @@
+apiVersion: 1.0
+metadata:
+  codeName: "com.hedonhaven.xvideos"
+  prettyName: "XVideos"
+  version: v0.1.0
+  developer: "Hedon Haven Community"
+  contactEmail: "contact@hedon-haven.top"
+  issueTrackerUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/issues"
+  description: "XVideos provider plugin for Hedon Haven featuring HLS/MP4 streams, channel catalogs, video previews, and search."
+  updateUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/releases/latest/download/update.yaml"
+providerData:
+  iconUrl: "https://www.xvideos.com/favicon.ico"
+  serviceUrl: "https://www.xvideos.com"
+  handleUrls:
+    - "https://www.xvideos.com/"
+    - "https://www.xvideos.com/video"
+    - "https://www.xvideos.com/channels/"
+    - "https://www.xvideos.com/profiles/"
+initialPageCounts:
+  initialHomePage: 0
+  initialSearchResultsPage: 0
+  initialCommentsPage: 0
+  initialVideoSuggestionsPage: 0
+  initialAuthorVideosPage: 0

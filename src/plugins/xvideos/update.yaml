@@ -1,0 +1,11 @@
+# Version release definition for Hedon Haven XVideos plugin.
+version: v0.1.0
+downloadUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/releases/latest/download/plugin.zip"
+sha256Sum: "calculate_on_release"
+changelog:
+  - Initial release of XVideos provider plugin for Hedon Haven
+  - Support for HLS and MP4 multi-resolution playback streams
+  - Homepage browsing, pagination, and video previews
+  - Search integration with relevance ranking
+  - Channel / Creator pages and catalog loading
+  - Embedded related video extraction

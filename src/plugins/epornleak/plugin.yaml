@@ -1,0 +1,25 @@
+apiVersion: 1.0
+metadata:
+  codeName: "com.hedonhaven.epornleak"
+  prettyName: "ePornLeak"
+  version: v0.1.0
+  developer: "Hedon Haven Community"
+  contactEmail: "contact@hedon-haven.top"
+  issueTrackerUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/issues"
+  description: "ePornLeak provider plugin for Hedon Haven featuring direct HLS streams, OnlyFans leak models/channels, category browsing, and search."
+  updateUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/releases/latest/download/update.yaml"
+providerData:
+  iconUrl: "https://epornleak.com/images/favicon/favicon-64x64.png"
+  serviceUrl: "https://epornleak.com"
+  handleUrls:
+    - "https://epornleak.com/"
+    - "https://epornleak.com/video/"
+    - "https://epornleak.com/model/"
+    - "https://epornleak.com/categories/"
+    - "https://epornleak.com/search"
+initialPageCounts:
+  initialHomePage: 1
+  initialSearchResultsPage: 1
+  initialCommentsPage: 0
+  initialVideoSuggestionsPage: 0
+  initialAuthorVideosPage: 1

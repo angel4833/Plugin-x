@@ -1,0 +1,6 @@
+{
+  "name": "Hedon Haven Plugin Studio - XVideos & Providers",
+  "description": "Development studio, live test runner, and ZIP compiler for Hedon Haven QuickJS external provider plugins, featuring the XVideos plugin.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
