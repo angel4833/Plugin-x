@@ -34,9 +34,11 @@ function normalizeImageUrl(value) {
   let url = String(value).trim();
   if (url.startsWith("//")) url = `https:${url}`;
   else if (url.startsWith("/")) url = `https://www.xvideos.com${url}`;
-  
-  // Replace .avif with .jpg if possible to ensure compatibility with Flutter Image widget
-  return url.replace(/\.avif(\?.*)?$/i, ".jpg$1");
+
+  // Replace XVideos frontend lazy placeholder THUMBNUM with frame 1
+  url = url.replace(/THUMBNUM/g, "1");
+  // Replace .avif / .webp with .jpg to ensure compatibility with Flutter Image widget
+  return url.replace(/\.(?:avif|webp)(\?.*)?$/i, ".jpg$1");
 }
 
 function parseDuration(value) {
@@ -116,21 +118,27 @@ function parseVideosFromHtml(htmlBody) {
       blockContent.match(/<p\s+class="title"[^>]*>\s*<a[^>]*>([\s\S]*?)<\/a>/i);
     const title = titleMatch ? cleanText(titleMatch[1]) : `Video ${id}`;
 
-    // Thumbnail: data-src or src
-    const thumbMatch =
-      blockContent.match(/data-src="([^"]+)"/i) ||
-      blockContent.match(/src="([^"]+)"/i);
-    const thumbnail = thumbMatch ? normalizeImageUrl(thumbMatch[1]) : "";
+    // Thumbnail: prefer data-src / non-blank src / data-src-avif / data-mzl
+    const dataSrcMatch = blockContent.match(/data-src="([^"]+)"/i);
+    const srcMatch = blockContent.match(/\ssrc="([^"]+)"/i);
+    const avifSrcMatch = blockContent.match(/data-src-avif="([^"]+)"/i);
+    const mzlMatch = blockContent.match(/data-mzl="([^"]+)"/i);
+    const rawThumb =
+      (dataSrcMatch && !/lightbox-blank/i.test(dataSrcMatch[1]) ? dataSrcMatch[1] : "") ||
+      (srcMatch && !/lightbox-blank/i.test(srcMatch[1]) ? srcMatch[1] : "") ||
+      (avifSrcMatch ? avifSrcMatch[1] : "") ||
+      (mzlMatch ? mzlMatch[1] : "");
+    const thumbnail = normalizeImageUrl(rawThumb);
 
     // Preview video (short loop): data-pvv
     const pvvMatch = blockContent.match(/data-pvv="([^"]+)"/i);
-    const previewVideo = pvvMatch ? pvvMatch[1] : null;
+    const previewVideo = pvvMatch ? normalizeImageUrl(pvvMatch[1]).replace(/\.jpg$/i, ".mp4") : null;
 
     // Duration: <span class="duration">3 min</span>
     const durationMatch = blockContent.match(/class="duration"[^>]*>([^<]+)<\/span>/i);
     const duration = durationMatch ? parseDuration(durationMatch[1]) : 0;
 
-    // Quality: <span class="video-hd-mark">1080p</span> or 720p
+    // Quality: <span class="video-hd-mark">1080p</span> or 1440p
     const qualityMatch = blockContent.match(/class="video-hd-mark"[^>]*>(\d+)p?<\/span>/i);
     const maxQuality = qualityMatch ? Number.parseInt(qualityMatch[1], 10) : 720;
 
@@ -143,16 +151,27 @@ function parseVideosFromHtml(htmlBody) {
     const ratingsPositivePercent = ratingMatch ? Number.parseInt(ratingMatch[1], 10) : null;
 
     // Author: <a href="/welcomix"><span class="name">Welcomix</span></a>
-    const authorMatch = blockContent.match(/<a\s+href="\/([^"#\/?]+)"[^>]*>\s*<span\s+class="name">([^<]+)<\/span>/i);
-    const authorID = authorMatch ? authorMatch[1] : null;
-    const authorName = authorMatch ? cleanText(authorMatch[2]) : null;
+    const authorMatch = blockContent.match(/<a\s+href="\/([^"#\?]+)"[^>]*>\s*<span\s+class="name">([^<]+)<\/span>/i);
+    const authorID = authorMatch ? authorMatch[1].replace(/\\\//g, "/").replace(/^\/+|\/+$/g, "") : "xvideos";
+    const authorName = authorMatch ? cleanText(authorMatch[2]) : "XVideos";
+
+    const cardHeaders = {
+      "User-Agent": XVIDEOS_USER_AGENT,
+      "Referer": "https://www.xvideos.com/",
+    };
+    const unavailableFields = [];
+    if (ratingsPositivePercent == null) unavailableFields.push("ratingsPositivePercent");
+    if (!previewVideo) unavailableFields.push("previewVideo");
+    if (viewsTotal == null) unavailableFields.push("viewsTotal");
 
     videos.push(
       new UniversalVideoPreview({
         iD: id,
         title,
         thumbnail,
+        thumbnailHttpHeaders: cardHeaders,
         previewVideo,
+        previewVideoHttpHeaders: cardHeaders,
         duration,
         viewsTotal,
         ratingsPositivePercent,
@@ -160,6 +179,7 @@ function parseVideosFromHtml(htmlBody) {
         authorName,
         authorID,
         verifiedAuthor: false,
+        unavailableFields,
       })
     );
   }
@@ -170,6 +190,10 @@ function parseVideosFromHtml(htmlBody) {
 function parseVideosFromJsonList(jsonList) {
   if (!Array.isArray(jsonList)) return [];
   const videos = [];
+  const cardHeaders = {
+    "User-Agent": XVIDEOS_USER_AGENT,
+    "Referer": "https://www.xvideos.com/",
+  };
 
   for (const item of jsonList) {
     if (!item) continue;
@@ -178,20 +202,28 @@ function parseVideosFromJsonList(jsonList) {
 
     const title = cleanText(item.tf || item.t || `Video ${id}`);
     const thumbnail = normalizeImageUrl(item.i || item.il || item.ip || item.st1 || "");
-    const previewVideo = item.ipu || null;
+    const previewVideo = item.ipu ? String(item.ipu).trim() : null;
     const duration = parseDuration(item.d);
-    const viewsTotal = parseCompactCount(item.n);
+    const viewsTotal = item.n != null ? parseCompactCount(item.n) : null;
     const ratingsPositivePercent = item.r ? Number.parseInt(String(item.r).replace("%", ""), 10) : null;
     const maxQuality = item.h ? 1080 : 720;
-    const authorName = item.pn || item.p || null;
-    const authorID = item.p || (item.pu ? item.pu.replace(/^\/+/, "") : null);
+    const authorName = item.pn || item.p || "XVideos";
+    const rawAuthorId = item.p || (item.pu ? item.pu : "xvideos");
+    const authorID = String(rawAuthorId).replace(/\\\//g, "/").replace(/^\/+|\/+$/g, "") || "xvideos";
+
+    const unavailableFields = [];
+    if (ratingsPositivePercent == null) unavailableFields.push("ratingsPositivePercent");
+    if (!previewVideo) unavailableFields.push("previewVideo");
+    if (viewsTotal == null) unavailableFields.push("viewsTotal");
 
     videos.push(
       new UniversalVideoPreview({
         iD: id,
         title,
         thumbnail,
+        thumbnailHttpHeaders: cardHeaders,
         previewVideo,
+        previewVideoHttpHeaders: cardHeaders,
         duration,
         viewsTotal,
         ratingsPositivePercent,
@@ -199,6 +231,7 @@ function parseVideosFromJsonList(jsonList) {
         authorName,
         authorID,
         verifiedAuthor: Boolean(item.ch),
+        unavailableFields,
       })
     );
   }
@@ -299,15 +332,37 @@ function parseExternalLink(uriString) {
 async function getHomePage(page) {
   try {
     const pageNum = Number.parseInt(page || 0, 10);
-    const url = pageNum <= 0 ? "https://www.xvideos.com/" : `https://www.xvideos.com/new/${pageNum}`;
-    const response = await xvideosRequest(url);
-
-    if (getStatusCode(response) !== 200) {
-      consoleLog("error", `getHomePage returned status ${getStatusCode(response)}`);
-      return [];
+    if (Number.isNaN(pageNum) || pageNum <= 0) {
+      const response = await xvideosRequest("https://www.xvideos.com/");
+      if (getStatusCode(response) !== 200) {
+        consoleLog("error", `getHomePage returned status ${getStatusCode(response)}`);
+        return [];
+      }
+      return parseVideosFromHtml(response.body);
     }
 
-    return parseVideosFromHtml(response.body);
+    // Fetch 2 /new/ pages per step (~54 items) so page size stays >= page 0 (48)
+    // and Hedon Haven infinite scroll never stops prematurely after page 1.
+    const p1 = pageNum * 2 - 1;
+    const p2 = pageNum * 2;
+    const [res1, res2] = await Promise.all([
+      xvideosRequest(`https://www.xvideos.com/new/${p1}`),
+      xvideosRequest(`https://www.xvideos.com/new/${p2}`),
+    ]);
+
+    const combined = [];
+    const seen = new Set();
+    for (const res of [res1, res2]) {
+      if (getStatusCode(res) === 200 && res.body) {
+        for (const v of parseVideosFromHtml(res.body)) {
+          if (v && v.iD && !seen.has(v.iD)) {
+            seen.add(v.iD);
+            combined.push(v);
+          }
+        }
+      }
+    }
+    return combined;
   } catch (err) {
     consoleLog("error", `getHomePage error: ${err.message}`);
     return [];
@@ -323,16 +378,33 @@ async function getSearchSuggestions(searchString) {
 async function getSearchResults(request, page) {
   try {
     const pageNum = Number.parseInt(page || 0, 10);
-    const query = request?.searchString || "";
-    const url = `https://www.xvideos.com/?k=${encodeURIComponent(query)}&p=${pageNum}`;
-
-    const response = await xvideosRequest(url);
-    if (getStatusCode(response) !== 200) {
-      consoleLog("error", `getSearchResults returned status ${getStatusCode(response)}`);
-      return [];
+    const query = String(request?.searchString || "").trim();
+    if (!query) {
+      return await getHomePage(pageNum);
     }
 
-    return parseVideosFromHtml(response.body);
+    // Fetch 2 search pages per step (~48-50 items) for reliable deep scrolling
+    const safePage = Number.isNaN(pageNum) || pageNum < 0 ? 0 : pageNum;
+    const p1 = safePage * 2;
+    const p2 = safePage * 2 + 1;
+    const [res1, res2] = await Promise.all([
+      xvideosRequest(`https://www.xvideos.com/?k=${encodeURIComponent(query)}&p=${p1}`),
+      xvideosRequest(`https://www.xvideos.com/?k=${encodeURIComponent(query)}&p=${p2}`),
+    ]);
+
+    const combined = [];
+    const seen = new Set();
+    for (const res of [res1, res2]) {
+      if (getStatusCode(res) === 200 && res.body) {
+        for (const v of parseVideosFromHtml(res.body)) {
+          if (v && v.iD && !seen.has(v.iD)) {
+            seen.add(v.iD);
+            combined.push(v);
+          }
+        }
+      }
+    }
+    return combined;
   } catch (err) {
     consoleLog("error", `getSearchResults error: ${err.message}`);
     return [];
@@ -413,10 +485,10 @@ async function getVideoMetadata(videoId, uvp) {
 
     if (uploaderMatch) {
       if (uploaderMatch[2] && uploaderMatch[3]) {
-        authorID = uploaderMatch[3].replace(/^\/+/, "");
+        authorID = uploaderMatch[3].replace(/\\\//g, "/").replace(/^\/+|\/+$/g, "");
         authorName = cleanText(uploaderMatch[2]);
       } else if (uploaderMatch[1] && uploaderMatch[2]) {
-        authorID = uploaderMatch[1];
+        authorID = uploaderMatch[1].replace(/\\\//g, "/").replace(/^\/+|\/+$/g, "");
         authorName = cleanText(uploaderMatch[2]);
       }
     }
@@ -500,51 +572,96 @@ async function getVideoSuggestions(videoID, rawHtml, page) {
   }
 }
 
+function normalizeXVideosAuthorId(authorID) {
+  return String(authorID || "").replace(/\\\//g, "/").replace(/^\/+|\/+$/g, "").trim();
+}
+
 function getAuthorUriFromID(authorID) {
-  const cleanId = String(authorID || "").replace(/^\/+/, "");
-  return `https://www.xvideos.com/${encodeURIComponent(cleanId)}`;
+  const cleanId = normalizeXVideosAuthorId(authorID);
+  if (!cleanId || cleanId === "xvideos") {
+    return "https://www.xvideos.com/";
+  }
+  const encodedPath = cleanId.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+  return `https://www.xvideos.com/${encodedPath}`;
 }
 
 async function getAuthorPage(authorID) {
   try {
-    const url = getAuthorUriFromID(authorID);
+    const cleanId = normalizeXVideosAuthorId(authorID) || "xvideos";
+    const defaultIcon = "https://assets-cdn77.xvideos-cdn.com/v3/img/skins/default/logo/xv.white.180.png";
+    if (cleanId === "xvideos") {
+      return new UniversalAuthorPage({
+        iD: "xvideos",
+        authorID: "xvideos",
+        name: "XVideos",
+        avatar: defaultIcon,
+        verified: true,
+        rawHtml: "",
+      });
+    }
+
+    const url = getAuthorUriFromID(cleanId);
     const response = await xvideosRequest(url);
     if (getStatusCode(response) !== 200) {
-      consoleLog("error", `getAuthorPage returned status ${getStatusCode(response)} for ${authorID}`);
+      consoleLog("error", `getAuthorPage returned status ${getStatusCode(response)} for ${cleanId}`);
       return null;
     }
 
-    const html = response.body;
+    const html = response.body || "";
 
-    // Check embedded user JSON
-    const userJsonMatch = html.match(/"user":\s*(\{[^}]*?"id_user":[\s\S]*?"url":"[^"]*"\})/i);
-    let name = authorID;
+    let name = cleanId;
     let avatar = null;
     let banner = null;
-    let videoCount = null;
 
+    // 1. Check embedded user JSON
+    const userJsonMatch = html.match(/"user":\s*(\{[^}]*?"id_user":[\s\S]*?"url":"[^"]*"\})/i);
     if (userJsonMatch) {
       try {
         const userData = JSON.parse(userJsonMatch[1]);
-        name = userData.display || userData.username || authorID;
+        name = userData.display || userData.username || name;
         avatar = normalizeImageUrl(userData.profile_picture || userData.profile_picture_small);
       } catch (_) {}
     }
 
-    // Banner
+    // 2. Profile picture & alt name fallback
+    const picMatch = html.match(/class="profile-pic"[\s\S]*?<img[^>]*?\ssrc="([^"]+)"/i);
+    if (!avatar && picMatch && picMatch[1]) {
+      avatar = normalizeImageUrl(picMatch[1]);
+    }
+    const altMatch = html.match(/class="profile-pic"[\s\S]*?<img[^>]*?\salt="([^"]+)"/i);
+    if (name === cleanId && altMatch && altMatch[1]) {
+      name = cleanText(altMatch[1]);
+    }
+
+    // 3. <title> fallback for channel/model display name
+    if (name === cleanId) {
+      const titleMatch = html.match(/<title>([\s\S]*?)<\/title>/i);
+      if (titleMatch && titleMatch[1]) {
+        const cleaned = cleanText(titleMatch[1]).replace(/\s*-\s*(?:Channel page|Profile page|Pornstar page|Model page|XVIDEOS\.COM).*$/i, "").trim();
+        if (cleaned) name = cleaned;
+      }
+    }
+
+    // 4. Banner, subscribers, total views
     const bannerMatch = html.match(/class="img-responsive"[^>]*src="([^"]+)"/i);
     if (bannerMatch) {
       banner = normalizeImageUrl(bannerMatch[1]);
     }
+    const subsMatch = html.match(/Subscribers:<\/strong>\s*<span>([^<]+)<\/span>/i);
+    const subscribers = subsMatch ? parseCompactCount(subsMatch[1]) : null;
+    const viewsMatch = html.match(/Total video views:<\/strong>\s*<span>([^<]+)<\/span>/i);
+    const viewsTotal = viewsMatch ? parseCompactCount(viewsMatch[1]) : null;
 
     return new UniversalAuthorPage({
-      iD: authorID,
-      authorID,
+      iD: cleanId,
+      authorID: cleanId,
       name,
-      avatar: avatar || "https://assets-cdn77.xvideos-cdn.com/v3/img/skins/default/logo/xv.white.180.png",
+      avatar: avatar || defaultIcon,
       banner,
-      videoCount,
+      subscribers,
+      viewsTotal,
       verified: true,
+      rawHtml: html,
     });
   } catch (err) {
     consoleLog("error", `getAuthorPage error: ${err.message}`);
@@ -555,28 +672,44 @@ async function getAuthorPage(authorID) {
 async function getAuthorVideos(authorID, rawHtmlOrPage, maybePage) {
   try {
     let pageNum = 0;
+    let passedHtml = "";
     if (typeof maybePage !== "undefined") {
       pageNum = Number.parseInt(maybePage || 0, 10);
+      if (typeof rawHtmlOrPage === "string") passedHtml = rawHtmlOrPage;
     } else {
       pageNum = Number.parseInt(rawHtmlOrPage || 0, 10);
     }
+    if (Number.isNaN(pageNum) || pageNum < 0) pageNum = 0;
 
-    // XVideos channel videos endpoint
-    const url = `https://www.xvideos.com/channels/${encodeURIComponent(authorID)}/videos/best/${pageNum}`;
-    const response = await xvideosRequest(url, {
-      "X-Requested-With": "XMLHttpRequest",
-    });
+    const cleanId = normalizeXVideosAuthorId(authorID);
+    const slug = cleanId.split("/").filter(Boolean).pop() || cleanId;
 
-    if (getStatusCode(response) === 200 && response.body) {
-      try {
-        const data = JSON.parse(response.body);
-        if (data && Array.isArray(data.videos)) {
-          return parseVideosFromJsonList(data.videos);
+    // Try channels endpoint first, then profiles endpoint, then rawHtml fallback
+    const candidates = [
+      `https://www.xvideos.com/channels/${encodeURIComponent(slug)}/videos/best/${pageNum}`,
+      `https://www.xvideos.com/profiles/${encodeURIComponent(slug)}/videos/best/${pageNum}`,
+    ];
+
+    for (const url of candidates) {
+      const response = await xvideosRequest(url, {
+        "X-Requested-With": "XMLHttpRequest",
+      });
+
+      if (getStatusCode(response) === 200 && response.body) {
+        try {
+          const data = JSON.parse(response.body);
+          if (data && Array.isArray(data.videos) && data.videos.length > 0) {
+            return parseVideosFromJsonList(data.videos);
+          }
+        } catch (_) {
+          const parsed = parseVideosFromHtml(response.body);
+          if (parsed.length > 0) return parsed;
         }
-      } catch (_) {
-        // Fallback to HTML parsing if not JSON
-        return parseVideosFromHtml(response.body);
       }
+    }
+
+    if (pageNum === 0 && passedHtml) {
+      return parseVideosFromHtml(passedHtml);
     }
 
     return [];
@@ -589,8 +722,9 @@ async function getAuthorVideos(authorID, rawHtmlOrPage, maybePage) {
 async function downloadThumbnail(uri, thumbnailHttpHeaders) {
   const isLegacy = xvideosSession.isLegacyBase64Host !== false;
   try {
-    if (!uri) return isLegacy ? "" : [];
-    const response = await xvideosRequest(uri, thumbnailHttpHeaders || {}, { binary: true });
+    const cleanUri = normalizeImageUrl(uri);
+    if (!cleanUri) return isLegacy ? "" : [];
+    const response = await xvideosRequest(cleanUri, thumbnailHttpHeaders || {}, { binary: true });
     if (getStatusCode(response) === 200) {
       if (response.isLegacyBase64Host) {
         return response.rawBodyBase64 || "";

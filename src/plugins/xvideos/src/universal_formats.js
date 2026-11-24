@@ -268,29 +268,48 @@ class UniversalAuthorPage {
   constructor(opts = {}) {
     this.iD = opts.iD ?? opts.authorID;
     this.authorID = opts.authorID ?? opts.iD;
-    this.name = opts.name;
-    this.avatar = opts.avatar ?? null;
+    this.name = opts.name ?? "";
+    this.avatar = opts.avatar ?? "";
     this.avatarHttpHeaders = opts.avatarHttpHeaders ?? null;
     this.banner = opts.banner ?? null;
     this.bannerHttpHeaders = opts.bannerHttpHeaders ?? null;
-    this.subscriberCount = opts.subscriberCount ?? null;
-    this.videoCount = opts.videoCount ?? null;
-    this.biography = opts.biography ?? null;
+    this.aliases = opts.aliases ?? null;
+    this.description = opts.description ?? null;
+    this.advancedDescription = opts.advancedDescription ?? null;
+    this.externalLinks = opts.externalLinks ?? null;
+    this.viewsTotal = opts.viewsTotal ?? null;
+    this.videosTotal = opts.videosTotal ?? opts.videoCount ?? null;
+    this.subscribers = opts.subscribers ?? opts.subscriberCount ?? null;
+    this.rank = opts.rank ?? null;
     this.verified = opts.verified ?? false;
+    this.rawHtml = typeof opts.rawHtml === "string" ? opts.rawHtml : "";
+    this.unavailableFields = opts.unavailableFields ?? [];
+    this.scrapeFailException = opts.scrapeFailException ?? null;
   }
   toMap() {
     return {
       "iD": this.iD,
       "authorID": this.authorID,
       "name": this.name,
+      "plugin": pluginCodeName,
       "avatar": this.avatar,
       "avatarHttpHeaders": this.avatarHttpHeaders,
       "banner": this.banner,
       "bannerHttpHeaders": this.bannerHttpHeaders,
-      "subscriberCount": this.subscriberCount,
-      "videoCount": this.videoCount,
-      "biography": this.biography,
+      "aliases": this.aliases,
+      "description": this.description,
+      "advancedDescription": this.advancedDescription,
+      "externalLinks": this.externalLinks,
+      "viewsTotal": this.viewsTotal,
+      "videosTotal": this.videosTotal,
+      "videoCount": this.videosTotal,
+      "subscribers": this.subscribers,
+      "subscriberCount": this.subscribers,
+      "rank": this.rank,
       "verified": this.verified,
+      "rawHtml": this.rawHtml ?? "",
+      "unavailableFields": this.unavailableFields,
+      "scrapeFailException": this.scrapeFailException?.toMap ? this.scrapeFailException.toMap() : null,
     };
   }
 }

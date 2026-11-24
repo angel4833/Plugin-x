@@ -1,0 +1,8 @@
+version: v0.1.0
+downloadUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/releases/latest/download/plugin.zip"
+sha256Sum: "calculate_on_release"
+changelog:
+  - Initial release of ePornLeak provider plugin for Hedon Haven
+  - Decodes encrypted JWPlayer HLS (.m3u8) streams from player-wrap data-source
+  - Supports homepage, search, search autocomplete (/suggest), model profiles, and suggested videos
+  - Dual-host compatibility for Hedon Haven v0.6.7 (Base64) and >=0.6.8 (bodyBytes)

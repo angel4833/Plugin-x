@@ -1,0 +1,9 @@
+version: v0.1.0
+downloadUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/releases/latest/download/plugin.zip"
+sha256Sum: "calculate_on_release"
+changelog:
+  - Initial release of XXXParodyHD provider plugin for Hedon Haven
+  - Multi-server embed resolver supporting LuluStream (.m3u8), MixDrop (.mp4), StreamWish, VOE, and DoodStream
+  - Search via /search/<query>/ and autocomplete via TurboSearch REST API
+  - Full support for Studios (/director/) and Pornstars (/pornstar/) catalogs
+  - Dual-host compatibility for Hedon Haven v0.6.7 (Base64) and >=0.6.8 (bodyBytes)

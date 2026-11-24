@@ -45,14 +45,23 @@ import {
   AuthorPageData,
   ExternalLinkResult,
 } from './utils/hedonRunner';
-import { xvideosPluginDef, epornleakPluginDef, createNewPluginTemplate } from './data/pluginsData';
+import {
+  xvideosPluginDef,
+  epornleakPluginDef,
+  xxxparodyhdPluginDef,
+  createNewPluginTemplate,
+} from './data/pluginsData';
 
 type ActiveView = 'simulator' | 'code' | 'new-plugin' | 'docs';
 type SimTab = 'home' | 'search' | 'player' | 'author' | 'link';
 
 export default function App() {
   // Plugin State
-  const [plugins, setPlugins] = useState<PluginDefinition[]>([xvideosPluginDef, epornleakPluginDef]);
+  const [plugins, setPlugins] = useState<PluginDefinition[]>([
+    xvideosPluginDef,
+    epornleakPluginDef,
+    xxxparodyhdPluginDef,
+  ]);
   const [activePluginId, setActivePluginId] = useState<string>('xvideos');
   const activePlugin = plugins.find((p) => p.id === activePluginId) || plugins[0];
 

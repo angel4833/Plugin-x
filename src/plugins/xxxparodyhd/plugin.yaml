@@ -1,0 +1,25 @@
+apiVersion: 1.0
+metadata:
+  codeName: "com.hedonhaven.xxxparodyhd"
+  prettyName: "XXXParodyHD"
+  version: v0.1.0
+  developer: "Hedon Haven Community"
+  contactEmail: "contact@hedon-haven.top"
+  issueTrackerUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/issues"
+  description: "XXXParodyHD provider plugin for Hedon Haven with multi-server stream extraction (LuluStream HLS, MixDrop MP4, VOE, DoodStream), studios, pornstars, and search."
+  updateUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/releases/latest/download/update.yaml"
+providerData:
+  iconUrl: "https://xxxparodyhd.net/wp-content/uploads/spt-brand/icon-192-da7c422f.png"
+  serviceUrl: "https://xxxparodyhd.net"
+  handleUrls:
+    - "https://xxxparodyhd.net/"
+    - "https://xxxparodyhd.net/movies/"
+    - "https://xxxparodyhd.net/director/"
+    - "https://xxxparodyhd.net/pornstar/"
+    - "https://xxxparodyhd.net/search/"
+initialPageCounts:
+  initialHomePage: 1
+  initialSearchResultsPage: 1
+  initialCommentsPage: 0
+  initialVideoSuggestionsPage: 0
+  initialAuthorVideosPage: 1

@@ -343,29 +343,48 @@ class UniversalAuthorPage {
   constructor(opts = {}) {
     this.iD = opts.iD ?? opts.authorID;
     this.authorID = opts.authorID ?? opts.iD;
-    this.name = opts.name;
-    this.avatar = opts.avatar ?? null;
+    this.name = opts.name ?? "";
+    this.avatar = opts.avatar ?? "";
     this.avatarHttpHeaders = opts.avatarHttpHeaders ?? null;
     this.banner = opts.banner ?? null;
     this.bannerHttpHeaders = opts.bannerHttpHeaders ?? null;
-    this.subscriberCount = opts.subscriberCount ?? null;
-    this.videoCount = opts.videoCount ?? null;
-    this.biography = opts.biography ?? null;
+    this.aliases = opts.aliases ?? null;
+    this.description = opts.description ?? null;
+    this.advancedDescription = opts.advancedDescription ?? null;
+    this.externalLinks = opts.externalLinks ?? null;
+    this.viewsTotal = opts.viewsTotal ?? null;
+    this.videosTotal = opts.videosTotal ?? opts.videoCount ?? null;
+    this.subscribers = opts.subscribers ?? opts.subscriberCount ?? null;
+    this.rank = opts.rank ?? null;
     this.verified = opts.verified ?? false;
+    this.rawHtml = typeof opts.rawHtml === "string" ? opts.rawHtml : "";
+    this.unavailableFields = opts.unavailableFields ?? [];
+    this.scrapeFailException = opts.scrapeFailException ?? null;
   }
   toMap() {
     return {
       "iD": this.iD,
       "authorID": this.authorID,
       "name": this.name,
+      "plugin": pluginCodeName,
       "avatar": this.avatar,
       "avatarHttpHeaders": this.avatarHttpHeaders,
       "banner": this.banner,
       "bannerHttpHeaders": this.bannerHttpHeaders,
-      "subscriberCount": this.subscriberCount,
-      "videoCount": this.videoCount,
-      "biography": this.biography,
+      "aliases": this.aliases,
+      "description": this.description,
+      "advancedDescription": this.advancedDescription,
+      "externalLinks": this.externalLinks,
+      "viewsTotal": this.viewsTotal,
+      "videosTotal": this.videosTotal,
+      "videoCount": this.videosTotal,
+      "subscribers": this.subscribers,
+      "subscriberCount": this.subscribers,
+      "rank": this.rank,
       "verified": this.verified,
+      "rawHtml": this.rawHtml ?? "",
+      "unavailableFields": this.unavailableFields,
+      "scrapeFailException": this.scrapeFailException?.toMap ? this.scrapeFailException.toMap() : null,
     };
   }
 }
@@ -574,6 +593,7 @@ function normalizeImageUrl(value) {
   let url = String(value).trim();
   if (url.startsWith("//")) url = "https:" + url;
   else if (url.startsWith("/")) url = "https://www.xvideos.com" + url;
+  url = url.replace(/THUMBNUM/g, "1");
   return url.replace(/\\.avif(\\?.*)?$|\\.webp(\\?.*)?$/i, ".jpg$1$2");
 }
 
@@ -643,13 +663,19 @@ function parseVideosFromHtml(htmlBody) {
       blockContent.match(/<p\\s+class="title"[^>]*>\\s*<a[^>]*>([\\s\\S]*?)<\\/a>/i);
     const title = titleMatch ? cleanText(titleMatch[1]) : "Video " + id;
 
-    const thumbMatch =
-      blockContent.match(/data-src="([^"]+)"/i) ||
-      blockContent.match(/src="([^"]+)"/i);
-    const thumbnail = thumbMatch ? normalizeImageUrl(thumbMatch[1]) : "";
+    const dataSrcMatch = blockContent.match(/data-src="([^"]+)"/i);
+    const srcMatch = blockContent.match(/\\ssrc="([^"]+)"/i);
+    const avifSrcMatch = blockContent.match(/data-src-avif="([^"]+)"/i);
+    const mzlMatch = blockContent.match(/data-mzl="([^"]+)"/i);
+    const rawThumb =
+      (dataSrcMatch && !/lightbox-blank/i.test(dataSrcMatch[1]) ? dataSrcMatch[1] : "") ||
+      (srcMatch && !/lightbox-blank/i.test(srcMatch[1]) ? srcMatch[1] : "") ||
+      (avifSrcMatch ? avifSrcMatch[1] : "") ||
+      (mzlMatch ? mzlMatch[1] : "");
+    const thumbnail = normalizeImageUrl(rawThumb);
 
     const pvvMatch = blockContent.match(/data-pvv="([^"]+)"/i);
-    const previewVideo = pvvMatch ? pvvMatch[1] : null;
+    const previewVideo = pvvMatch ? normalizeImageUrl(pvvMatch[1]).replace(/\\.jpg$/i, ".mp4") : null;
 
     const durationMatch = blockContent.match(/class="duration"[^>]*>([^<]+)<\\/span>/i);
     const duration = durationMatch ? parseDuration(durationMatch[1]) : 0;
@@ -663,16 +689,27 @@ function parseVideosFromHtml(htmlBody) {
     const ratingMatch = blockContent.match(/(\\d{1,3})%/);
     const ratingsPositivePercent = ratingMatch ? Number.parseInt(ratingMatch[1], 10) : null;
 
-    const authorMatch = blockContent.match(/<a\\s+href="\\/([^"#\\/?]+)"[^>]*>\\s*<span\\s+class="name">([^<]+)<\\/span>/i);
-    const authorID = authorMatch ? authorMatch[1] : null;
-    const authorName = authorMatch ? cleanText(authorMatch[2]) : null;
+    const authorMatch = blockContent.match(/<a\\s+href="\\/([^"#\\?]+)"[^>]*>\\s*<span\\s+class="name">([^<]+)<\\/span>/i);
+    const authorID = authorMatch ? authorMatch[1].replace(/\\\\\\//g, "/").replace(/^\\/+|\\/+$/g, "") : "xvideos";
+    const authorName = authorMatch ? cleanText(authorMatch[2]) : "XVideos";
+
+    const cardHeaders = {
+      "User-Agent": XVIDEOS_USER_AGENT,
+      "Referer": "https://www.xvideos.com/",
+    };
+    const unavailableFields = [];
+    if (ratingsPositivePercent == null) unavailableFields.push("ratingsPositivePercent");
+    if (!previewVideo) unavailableFields.push("previewVideo");
+    if (viewsTotal == null) unavailableFields.push("viewsTotal");
 
     videos.push(
       new UniversalVideoPreview({
         iD: id,
         title,
         thumbnail,
+        thumbnailHttpHeaders: cardHeaders,
         previewVideo,
+        previewVideoHttpHeaders: cardHeaders,
         duration,
         viewsTotal,
         ratingsPositivePercent,
@@ -680,6 +717,7 @@ function parseVideosFromHtml(htmlBody) {
         authorName,
         authorID,
         verifiedAuthor: false,
+        unavailableFields,
       })
     );
   }
@@ -690,6 +728,10 @@ function parseVideosFromHtml(htmlBody) {
 function parseVideosFromJsonList(jsonList) {
   if (!Array.isArray(jsonList)) return [];
   const videos = [];
+  const cardHeaders = {
+    "User-Agent": XVIDEOS_USER_AGENT,
+    "Referer": "https://www.xvideos.com/",
+  };
 
   for (const item of jsonList) {
     if (!item) continue;
@@ -698,20 +740,28 @@ function parseVideosFromJsonList(jsonList) {
 
     const title = cleanText(item.tf || item.t || "Video " + id);
     const thumbnail = normalizeImageUrl(item.i || item.il || item.ip || item.st1 || "");
-    const previewVideo = item.ipu || null;
+    const previewVideo = item.ipu ? String(item.ipu).trim() : null;
     const duration = parseDuration(item.d);
-    const viewsTotal = parseCompactCount(item.n);
+    const viewsTotal = item.n != null ? parseCompactCount(item.n) : null;
     const ratingsPositivePercent = item.r ? Number.parseInt(String(item.r).replace("%", ""), 10) : null;
     const maxQuality = item.h ? 1080 : 720;
-    const authorName = item.pn || item.p || null;
-    const authorID = item.p || (item.pu ? item.pu.replace(/^\\/+/, "") : null);
+    const authorName = item.pn || item.p || "XVideos";
+    const rawAuthorId = item.p || (item.pu ? item.pu : "xvideos");
+    const authorID = String(rawAuthorId).replace(/\\\\\\//g, "/").replace(/^\\/+|\\/+$/g, "") || "xvideos";
+
+    const unavailableFields = [];
+    if (ratingsPositivePercent == null) unavailableFields.push("ratingsPositivePercent");
+    if (!previewVideo) unavailableFields.push("previewVideo");
+    if (viewsTotal == null) unavailableFields.push("viewsTotal");
 
     videos.push(
       new UniversalVideoPreview({
         iD: id,
         title,
         thumbnail,
+        thumbnailHttpHeaders: cardHeaders,
         previewVideo,
+        previewVideoHttpHeaders: cardHeaders,
         duration,
         viewsTotal,
         ratingsPositivePercent,
@@ -719,6 +769,7 @@ function parseVideosFromJsonList(jsonList) {
         authorName,
         authorID,
         verifiedAuthor: Boolean(item.ch),
+        unavailableFields,
       })
     );
   }
@@ -815,15 +866,35 @@ function parseExternalLink(uriString) {
 async function getHomePage(page) {
   try {
     const pageNum = Number.parseInt(page || 0, 10);
-    const url = pageNum <= 0 ? "https://www.xvideos.com/" : "https://www.xvideos.com/new/" + pageNum;
-    const response = await xvideosRequest(url);
-
-    if (getStatusCode(response) !== 200) {
-      consoleLog("error", "getHomePage returned status " + getStatusCode(response));
-      return [];
+    if (Number.isNaN(pageNum) || pageNum <= 0) {
+      const response = await xvideosRequest("https://www.xvideos.com/");
+      if (getStatusCode(response) !== 200) {
+        consoleLog("error", "getHomePage returned status " + getStatusCode(response));
+        return [];
+      }
+      return parseVideosFromHtml(response.body);
     }
 
-    return parseVideosFromHtml(response.body);
+    const p1 = pageNum * 2 - 1;
+    const p2 = pageNum * 2;
+    const [res1, res2] = await Promise.all([
+      xvideosRequest("https://www.xvideos.com/new/" + p1),
+      xvideosRequest("https://www.xvideos.com/new/" + p2),
+    ]);
+
+    const combined = [];
+    const seen = new Set();
+    for (const res of [res1, res2]) {
+      if (getStatusCode(res) === 200 && res.body) {
+        for (const v of parseVideosFromHtml(res.body)) {
+          if (v && v.iD && !seen.has(v.iD)) {
+            seen.add(v.iD);
+            combined.push(v);
+          }
+        }
+      }
+    }
+    return combined;
   } catch (err) {
     consoleLog("error", "getHomePage error: " + err.message);
     return [];
@@ -837,16 +908,32 @@ async function getSearchSuggestions(searchString) {
 async function getSearchResults(request, page) {
   try {
     const pageNum = Number.parseInt(page || 0, 10);
-    const query = request?.searchString || "";
-    const url = "https://www.xvideos.com/?k=" + encodeURIComponent(query) + "&p=" + pageNum;
-
-    const response = await xvideosRequest(url);
-    if (getStatusCode(response) !== 200) {
-      consoleLog("error", "getSearchResults returned status " + getStatusCode(response));
-      return [];
+    const query = String(request?.searchString || "").trim();
+    if (!query) {
+      return await getHomePage(pageNum);
     }
 
-    return parseVideosFromHtml(response.body);
+    const safePage = Number.isNaN(pageNum) || pageNum < 0 ? 0 : pageNum;
+    const p1 = safePage * 2;
+    const p2 = safePage * 2 + 1;
+    const [res1, res2] = await Promise.all([
+      xvideosRequest("https://www.xvideos.com/?k=" + encodeURIComponent(query) + "&p=" + p1),
+      xvideosRequest("https://www.xvideos.com/?k=" + encodeURIComponent(query) + "&p=" + p2),
+    ]);
+
+    const combined = [];
+    const seen = new Set();
+    for (const res of [res1, res2]) {
+      if (getStatusCode(res) === 200 && res.body) {
+        for (const v of parseVideosFromHtml(res.body)) {
+          if (v && v.iD && !seen.has(v.iD)) {
+            seen.add(v.iD);
+            combined.push(v);
+          }
+        }
+      }
+    }
+    return combined;
   } catch (err) {
     consoleLog("error", "getSearchResults error: " + err.message);
     return [];
@@ -917,10 +1004,10 @@ async function getVideoMetadata(videoId, uvp) {
 
     if (uploaderMatch) {
       if (uploaderMatch[2] && uploaderMatch[3]) {
-        authorID = uploaderMatch[3].replace(/^\\/+/, "");
+        authorID = uploaderMatch[3].replace(/\\\\\\//g, "/").replace(/^\\/+|\\/+$/g, "");
         authorName = cleanText(uploaderMatch[2]);
       } else if (uploaderMatch[1] && uploaderMatch[2]) {
-        authorID = uploaderMatch[1];
+        authorID = uploaderMatch[1].replace(/\\\\\\//g, "/").replace(/^\\/+|\\/+$/g, "");
         authorName = cleanText(uploaderMatch[2]);
       }
     }
@@ -1000,49 +1087,92 @@ async function getVideoSuggestions(videoID, rawHtml, page) {
   }
 }
 
+function normalizeXVideosAuthorId(authorID) {
+  return String(authorID || "").replace(/\\\\\\//g, "/").replace(/^\\/+|\\/+$/g, "").trim();
+}
+
 function getAuthorUriFromID(authorID) {
-  const cleanId = String(authorID || "").replace(/^\\/+/, "");
-  return "https://www.xvideos.com/" + encodeURIComponent(cleanId);
+  const cleanId = normalizeXVideosAuthorId(authorID);
+  if (!cleanId || cleanId === "xvideos") {
+    return "https://www.xvideos.com/";
+  }
+  const encodedPath = cleanId.split("/").filter(Boolean).map(encodeURIComponent).join("/");
+  return "https://www.xvideos.com/" + encodedPath;
 }
 
 async function getAuthorPage(authorID) {
   try {
-    const url = getAuthorUriFromID(authorID);
+    const cleanId = normalizeXVideosAuthorId(authorID) || "xvideos";
+    const defaultIcon = "https://assets-cdn77.xvideos-cdn.com/v3/img/skins/default/logo/xv.white.180.png";
+    if (cleanId === "xvideos") {
+      return new UniversalAuthorPage({
+        iD: "xvideos",
+        authorID: "xvideos",
+        name: "XVideos",
+        avatar: defaultIcon,
+        verified: true,
+        rawHtml: "",
+      });
+    }
+
+    const url = getAuthorUriFromID(cleanId);
     const response = await xvideosRequest(url);
     if (getStatusCode(response) !== 200) {
-      consoleLog("error", "getAuthorPage returned status " + getStatusCode(response) + " for " + authorID);
+      consoleLog("error", "getAuthorPage returned status " + getStatusCode(response) + " for " + cleanId);
       return null;
     }
 
-    const html = response.body;
+    const html = response.body || "";
 
-    const userJsonMatch = html.match(/"user":\\s*(\\{[^}]*?"id_user":[\\s\\S]*?"url":"[^"]*"\\})/i);
-    let name = authorID;
+    let name = cleanId;
     let avatar = null;
     let banner = null;
-    let videoCount = null;
 
+    const userJsonMatch = html.match(/"user":\\s*(\\{[^}]*?"id_user":[\\s\\S]*?"url":"[^"]*"\\})/i);
     if (userJsonMatch) {
       try {
         const userData = JSON.parse(userJsonMatch[1]);
-        name = userData.display || userData.username || authorID;
+        name = userData.display || userData.username || name;
         avatar = normalizeImageUrl(userData.profile_picture || userData.profile_picture_small);
       } catch (_) {}
+    }
+
+    const picMatch = html.match(/class="profile-pic"[\\s\\S]*?<img[^>]*?\\ssrc="([^"]+)"/i);
+    if (!avatar && picMatch && picMatch[1]) {
+      avatar = normalizeImageUrl(picMatch[1]);
+    }
+    const altMatch = html.match(/class="profile-pic"[\\s\\S]*?<img[^>]*?\\salt="([^"]+)"/i);
+    if (name === cleanId && altMatch && altMatch[1]) {
+      name = cleanText(altMatch[1]);
+    }
+
+    if (name === cleanId) {
+      const titleMatch = html.match(/<title>([\\s\\S]*?)<\\/title>/i);
+      if (titleMatch && titleMatch[1]) {
+        const cleaned = cleanText(titleMatch[1]).replace(/\\s*-\\s*(?:Channel page|Profile page|Pornstar page|Model page|XVIDEOS\\.COM).*$/i, "").trim();
+        if (cleaned) name = cleaned;
+      }
     }
 
     const bannerMatch = html.match(/class="img-responsive"[^>]*src="([^"]+)"/i);
     if (bannerMatch) {
       banner = normalizeImageUrl(bannerMatch[1]);
     }
+    const subsMatch = html.match(/Subscribers:<\\/strong>\\s*<span>([^<]+)<\\/span>/i);
+    const subscribers = subsMatch ? parseCompactCount(subsMatch[1]) : null;
+    const viewsMatch = html.match(/Total video views:<\\/strong>\\s*<span>([^<]+)<\\/span>/i);
+    const viewsTotal = viewsMatch ? parseCompactCount(viewsMatch[1]) : null;
 
     return new UniversalAuthorPage({
-      iD: authorID,
-      authorID,
+      iD: cleanId,
+      authorID: cleanId,
       name,
-      avatar: avatar || "https://assets-cdn77.xvideos-cdn.com/v3/img/skins/default/logo/xv.white.180.png",
+      avatar: avatar || defaultIcon,
       banner,
-      videoCount,
+      subscribers,
+      viewsTotal,
       verified: true,
+      rawHtml: html,
     });
   } catch (err) {
     consoleLog("error", "getAuthorPage error: " + err.message);
@@ -1053,26 +1183,43 @@ async function getAuthorPage(authorID) {
 async function getAuthorVideos(authorID, rawHtmlOrPage, maybePage) {
   try {
     let pageNum = 0;
+    let passedHtml = "";
     if (typeof maybePage !== "undefined") {
       pageNum = Number.parseInt(maybePage || 0, 10);
+      if (typeof rawHtmlOrPage === "string") passedHtml = rawHtmlOrPage;
     } else {
       pageNum = Number.parseInt(rawHtmlOrPage || 0, 10);
     }
+    if (Number.isNaN(pageNum) || pageNum < 0) pageNum = 0;
 
-    const url = "https://www.xvideos.com/channels/" + encodeURIComponent(authorID) + "/videos/best/" + pageNum;
-    const response = await xvideosRequest(url, {
-      "X-Requested-With": "XMLHttpRequest",
-    });
+    const cleanId = normalizeXVideosAuthorId(authorID);
+    const slug = cleanId.split("/").filter(Boolean).pop() || cleanId;
 
-    if (getStatusCode(response) === 200 && response.body) {
-      try {
-        const data = JSON.parse(response.body);
-        if (data && Array.isArray(data.videos)) {
-          return parseVideosFromJsonList(data.videos);
+    const candidates = [
+      "https://www.xvideos.com/channels/" + encodeURIComponent(slug) + "/videos/best/" + pageNum,
+      "https://www.xvideos.com/profiles/" + encodeURIComponent(slug) + "/videos/best/" + pageNum,
+    ];
+
+    for (const url of candidates) {
+      const response = await xvideosRequest(url, {
+        "X-Requested-With": "XMLHttpRequest",
+      });
+
+      if (getStatusCode(response) === 200 && response.body) {
+        try {
+          const data = JSON.parse(response.body);
+          if (data && Array.isArray(data.videos) && data.videos.length > 0) {
+            return parseVideosFromJsonList(data.videos);
+          }
+        } catch (_) {
+          const parsed = parseVideosFromHtml(response.body);
+          if (parsed.length > 0) return parsed;
         }
-      } catch (_) {
-        return parseVideosFromHtml(response.body);
       }
+    }
+
+    if (pageNum === 0 && passedHtml) {
+      return parseVideosFromHtml(passedHtml);
     }
 
     return [];
@@ -1085,8 +1232,9 @@ async function getAuthorVideos(authorID, rawHtmlOrPage, maybePage) {
 async function downloadThumbnail(uri, thumbnailHttpHeaders) {
   const isLegacy = xvideosSession.isLegacyBase64Host !== false;
   try {
-    if (!uri) return isLegacy ? "" : [];
-    const response = await xvideosRequest(uri, thumbnailHttpHeaders || {}, { binary: true });
+    const cleanUri = normalizeImageUrl(uri);
+    if (!cleanUri) return isLegacy ? "" : [];
+    const response = await xvideosRequest(cleanUri, thumbnailHttpHeaders || {}, { binary: true });
     if (getStatusCode(response) === 200) {
       if (response.isLegacyBase64Host) {
         return response.rawBodyBase64 || "";
@@ -1183,7 +1331,7 @@ export const epornleakPluginDef: PluginDefinition = {
   codeName: 'com.hedonhaven.epornleak',
   version: 'v0.1.0',
   serviceUrl: 'https://epornleak.com',
-  description: 'ePornLeak provider plugin for Hedon Haven featuring multi-server stream extraction (Doodstream, Voe, Filemoon, Streamwish), OnlyFans leaks aggregator, search, and model channels.',
+  description: 'ePornLeak provider plugin for Hedon Haven featuring encrypted JWPlayer HLS (.m3u8) stream decoding, model profiles, autocomplete suggestions, and search.',
   yamlContent: `apiVersion: 1.0
 metadata:
   codeName: "com.hedonhaven.epornleak"
@@ -1192,7 +1340,7 @@ metadata:
   developer: "Hedon Haven Community"
   contactEmail: "contact@hedon-haven.top"
   issueTrackerUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/issues"
-  description: "ePornLeak provider plugin for Hedon Haven featuring multi-server streams, leak models, and search."
+  description: "ePornLeak provider plugin for Hedon Haven featuring direct HLS streams, OnlyFans leak models/channels, category browsing, and search."
   updateUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/releases/latest/download/update.yaml"
 providerData:
   iconUrl: "https://epornleak.com/images/favicon/favicon-64x64.png"
@@ -1201,7 +1349,8 @@ providerData:
     - "https://epornleak.com/"
     - "https://epornleak.com/video/"
     - "https://epornleak.com/model/"
-    - "https://epornleak.com/search/"
+    - "https://epornleak.com/categories/"
+    - "https://epornleak.com/search"
 initialPageCounts:
   initialHomePage: 1
   initialSearchResultsPage: 1
@@ -1213,9 +1362,9 @@ downloadUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/releases/
 sha256Sum: "calculate_on_release"
 changelog:
   - Initial release of ePornLeak provider plugin for Hedon Haven
-  - Multi-server embed stream extraction (Doodstream, Voe, Filemoon, Streamwish, HLS/MP4)
-  - Homepage feed browsing and model/creator pages
-  - Search integration`,
+  - Decodes encrypted JWPlayer HLS (.m3u8) streams from player-wrap data-source
+  - Supports homepage, search, search autocomplete (/suggest), model profiles, and suggested videos
+  - Dual-host compatibility for Hedon Haven v0.6.7 (Base64) and >=0.6.8 (bodyBytes)`,
   sourceFiles: {
     bridge: xvideosPluginDef.sourceFiles.bridge,
     universal: xvideosPluginDef.sourceFiles.universal.replace('com.hedonhaven.xvideos', 'com.hedonhaven.epornleak'),
@@ -1223,8 +1372,12 @@ changelog:
       .replace(/https:\/\/www\.xvideos\.com\//g, "https://epornleak.com/")
       .replace(/xvideos/g, "epornleak")
       .replace(/XVIDEOS/g, "EPORNLEAK"),
-    main: `// ePornLeak Provider Plugin for Hedon Haven with Multi-Server Embed Support.
+    main: `// ePornLeak Provider Plugin for Hedon Haven.
+// Follows Hedon Haven QuickJS external JavaScript contract.
+
 const PLUGIN_CODE_NAME = "com.hedonhaven.epornleak";
+const EPORNLEAK_BASE_URL = "https://epornleak.com";
+const EPORNLEAK_DEFAULT_ICON = "https://epornleak.com/images/favicon/favicon-64x64.png";
 
 function getStatusCode(response) {
   if (!response) return 0;
@@ -1244,6 +1397,11 @@ function cleanText(value) {
     .replace(/&#0*39;|&apos;/gi, "'")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
+    .replace(/&excl;/gi, "!")
+    .replace(/&lpar;/gi, "(")
+    .replace(/&rpar;/gi, ")")
+    .replace(/&hellip;/gi, "...")
+    .replace(/&nbsp;/gi, " ")
     .replace(/\\s+/g, " ")
     .trim();
 }
@@ -1252,53 +1410,162 @@ function normalizeImageUrl(value) {
   if (!value) return "";
   let url = String(value).trim();
   if (url.startsWith("//")) url = "https:" + url;
-  else if (url.startsWith("/")) url = "https://epornleak.com" + url;
-  return url.replace(/\\.avif(\\?.*)?$|\\.webp(\\?.*)?$/i, ".jpg$1$2");
+  else if (url.startsWith("/")) url = EPORNLEAK_BASE_URL + url;
+  return url;
+}
+
+function parseDuration(value) {
+  const str = String(value || "").trim();
+  if (!str) return 0;
+
+  const iso = str.match(/^PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?$/i);
+  if (iso) {
+    return Number(iso[1] || 0) * 3600 + Number(iso[2] || 0) * 60 + Number(iso[3] || 0);
+  }
+
+  const colonMatch = str.match(/(\\d{1,2}):(\\d{2})(?::(\\d{2}))?/);
+  if (colonMatch) {
+    if (colonMatch[3]) {
+      return Number(colonMatch[1]) * 3600 + Number(colonMatch[2]) * 60 + Number(colonMatch[3]);
+    }
+    return Number(colonMatch[1]) * 60 + Number(colonMatch[2]);
+  }
+
+  let totalSecs = 0;
+  const hMatch = str.match(/(\\d+)\\s*(?:h|hr|hours?)/i);
+  const mMatch = str.match(/(\\d+)\\s*(?:min|mins?|m)/i);
+  const sMatch = str.match(/(\\d+)\\s*(?:sec|secs?|s)/i);
+  if (hMatch) totalSecs += Number(hMatch[1]) * 3600;
+  if (mMatch) totalSecs += Number(mMatch[1]) * 60;
+  if (sMatch) totalSecs += Number(sMatch[1]);
+  return totalSecs;
+}
+
+function parseCompactCount(value) {
+  const str = String(value || "").trim().replace(/,/g, "");
+  if (!str) return 0;
+  const match = str.match(/^(\\d+(?:\\.\\d+)?)\\s*([KMBkmb])?/);
+  if (!match) {
+    return Number.parseInt(str.replace(/[^\\d]/g, ""), 10) || 0;
+  }
+  const num = Number.parseFloat(match[1]);
+  const suffix = (match[2] || "").toUpperCase();
+  if (suffix === "K") return Math.round(num * 1000);
+  if (suffix === "M") return Math.round(num * 1000000);
+  if (suffix === "B") return Math.round(num * 1000000000);
+  return Math.round(num);
+}
+
+function parseDateSafe(rawDate) {
+  if (!rawDate) return null;
+  const cleaned = String(rawDate).trim().replace(/^(\\d{4}-\\d{2}-\\d{2})\\s+(\\d{2}:\\d{2}:\\d{2})$/, "$1T$2Z");
+  const d = new Date(cleaned);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function extractVideoSlugFromUrl(url) {
+  if (!url) return "";
+  const match = String(url).match(/\\/video\\/([^\\/?#]+)/i);
+  return match ? match[1] : "";
+}
+
+function decodePlayerDataSource(encodedSource, htmlBody) {
+  if (!encodedSource) return "";
+  const raw = String(encodedSource).trim();
+
+  if (htmlBody) {
+    const fnMatch = htmlBody.match(/(\\(function\\s*\\(_0x[\\s\\S]*?function\\s+f\\(_0x[a-f0-9]+\\)\\s*\\{[\\s\\S]*?\\}\\s*)var\\s+playerWrap/);
+    if (fnMatch) {
+      try {
+        const atobPolyfill = (b64) => epornleakDecodeBase64Utf8(b64);
+        const runner = new Function("atob", "src", fnMatch[1] + "\\nreturn f(src);");
+        const decoded = runner(atobPolyfill, raw);
+        if (typeof decoded === "string" && /^https?:\\/\\//i.test(decoded.trim())) {
+          return decoded.trim();
+        }
+      } catch (err) {
+        consoleLog("warning", "Dynamic player decoder fallback triggered: " + err.message);
+      }
+    }
+  }
+
+  if (raw.length > 32) {
+    try {
+      const inner = raw.slice(16, -16).split("").reverse().join("");
+      const candidate = epornleakDecodeBase64Utf8(inner);
+      if (/^https?:\\/\\//i.test(candidate.trim())) {
+        return candidate.trim();
+      }
+    } catch (_) {}
+  }
+
+  try {
+    const reversed = raw.split("").reverse().join("");
+    for (const marker of ["aHR0cHM6Ly8", "aHR0cDovLw"]) {
+      const idx = reversed.indexOf(marker);
+      if (idx >= 0) {
+        const candidate = epornleakDecodeBase64Utf8(reversed.slice(idx));
+        const urlMatch = candidate.match(/https?:\\/\\/[^\\s"'<>]+/i);
+        if (urlMatch) return urlMatch[0];
+      }
+    }
+  } catch (_) {}
+
+  return "";
 }
 
 function parseVideosFromHtml(htmlBody) {
   const text = String(htmlBody || "");
   const videos = [];
+  const seen = new Set();
 
-  const cardRegex = /<article[\\s\\S]*?class="[^"]*?(?:post|video|item)[^"]*"[\\s\\S]*?>([\\s\\S]*?)<\\/article>/gi;
-  let match;
-  let matches = [];
-  while ((match = cardRegex.exec(text)) !== null) {
-    matches.push(match[1]);
-  }
+  const parts = text.split(/<div\\s+class="ui-card-root\\s+ui-card-video">/i);
 
-  if (matches.length === 0) {
-    const divCardRegex = /<div\\s+[^>]*?class="[^"]*?(?:card|video-box|thumb)[^"]*"[\\s\\S]*?>([\\s\\S]*?)<\\/div>/gi;
-    while ((match = divCardRegex.exec(text)) !== null) {
-      matches.push(match[1]);
-    }
-  }
+  for (let i = 1; i < parts.length; i++) {
+    const chunk = parts[i].split(/<\\/section>|<nav\\s|<footer/i)[0];
 
-  if (matches.length === 0) {
-    matches = [text];
-  }
+    const linkMatch = chunk.match(/<a\\s+class="ui-card-link"\\s+href="([^"]+)"(?:\\s+title="([^"]*)")?/i);
+    if (!linkMatch) continue;
 
-  const linkRegex = /<a\\s+[^>]*?href="(https:\\/\\/epornleak.com\\/video\\/[^"]+|\\/video\\/[^"]+)"[^>]*>([\\s\\S]*?)<\\/a>/gi;
-  let linkMatch;
+    const id = extractVideoSlugFromUrl(linkMatch[1]);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
 
-  while ((linkMatch = linkRegex.exec(text)) !== null) {
-    const rawUrl = linkMatch[1];
-    const innerHtml = linkMatch[2];
+    const titleFromAttr = linkMatch[2] ? cleanText(linkMatch[2]) : "";
+    const titleFromTag = chunk.match(/<h3[^>]*class="[^"]*ui-card-title[^"]*"[^>]*>([\\s\\S]*?)<\\/h3>/i)
+      || chunk.match(/class="[^"]*ui-card-title[^"]*"[^>]*>([\\s\\S]*?)<\\/div>/i);
+    const title = titleFromTag ? cleanText(titleFromTag[1]) : (titleFromAttr || "Video " + id);
 
-    const idMatch = rawUrl.match(/\\/video\\/([^\\/\\?#]+)/i);
-    const id = idMatch ? idMatch[1] : "";
-    if (!id || videos.some((v) => v.iD === id)) continue;
+    const thumbMatch =
+      chunk.match(/<img\\s+class="ui-card-thumbnail"\\s+[^>]*?src="([^"]+)"/i) ||
+      chunk.match(/<img\\s+[^>]*?src="([^"]+\\/(?:player|thumbnail)\\.(?:jpg|webp)[^"]*)"/i) ||
+      chunk.match(/<img\\s+[^>]*?src="([^"]+)"/i);
+    const thumbnail = thumbMatch ? normalizeImageUrl(thumbMatch[1]) : EPORNLEAK_DEFAULT_ICON;
 
-    const imgMatch = innerHtml.match(/<img\\s+[^>]*?src="([^"]+)"[^>]*alt="([^"]+)"/i) || innerHtml.match(/<img\\s+[^>]*?alt="([^"]+)"[^>]*src="([^"]+)"/i);
-    const title = imgMatch ? cleanText(imgMatch[2] || imgMatch[1]) : "Video " + id;
-    const thumbnail = normalizeImageUrl(imgMatch ? (imgMatch[1].startsWith('http') ? imgMatch[1] : imgMatch[2]) : "");
+    const durMatch = chunk.match(/class="ui-card-duration[^"]*"[^>]*>([^<]+)<\\/div>/i);
+    const duration = durMatch ? parseDuration(durMatch[1]) : null;
+
+    const posterMatch = chunk.match(/<a\\s+class="ui-card-poster"\\s+href="[^"]*\\/model\\/([^"\\/?#]+)"(?:\\s+title="([^"]*)")?/i);
+    const posterNameMatch = chunk.match(/class="ui-card-poster-name"[^>]*>[\\s\\S]*?<span[^>]*>([^<]+)<\\/span>/i);
+    const authorID = posterMatch ? posterMatch[1] : null;
+    const authorName = posterNameMatch
+      ? cleanText(posterNameMatch[1])
+      : (posterMatch && posterMatch[2] ? cleanText(posterMatch[2]) : null);
+
+    const viewsMatch = chunk.match(/<div\\s+class="ui-card-views"[^>]*>[\\s\\S]*?<span>([^<]+)<\\/span>/i);
+    const viewsTotal = viewsMatch ? parseCompactCount(viewsMatch[1]) : null;
 
     videos.push(
       new UniversalVideoPreview({
         iD: id,
         title,
         thumbnail,
+        duration,
+        viewsTotal,
         maxQuality: 1080,
+        authorID,
+        authorName,
+        verifiedAuthor: Boolean(authorID),
       })
     );
   }
@@ -1307,12 +1574,32 @@ function parseVideosFromHtml(htmlBody) {
 }
 
 async function runFunctionalityTest() {
-  consoleLog("info", "Starting ePornLeak functionality test...");
+  consoleLog("info", "Starting ePornLeak plugin functionality test...");
   try {
-    const res = await epornleakRequest("https://epornleak.com/");
-    return getStatusCode(res) === 200;
+    const homeResponse = await epornleakRequest(EPORNLEAK_BASE_URL + "/");
+    const homeStatus = getStatusCode(homeResponse);
+    if (homeStatus !== 200) {
+      consoleLog("error", "ePornLeak home returned status " + homeStatus);
+      return false;
+    }
+
+    const videos = parseVideosFromHtml(homeResponse.body);
+    if (!videos || videos.length === 0) {
+      consoleLog("error", "No videos parsed from ePornLeak homepage");
+      return false;
+    }
+
+    const sample = videos[0];
+    const metadata = await getVideoMetadata(sample.iD, sample);
+    if (!metadata || !metadata.m3u8Uris || Object.keys(metadata.m3u8Uris).length === 0) {
+      consoleLog("error", "Failed to decode stream URL for " + sample.iD);
+      return false;
+    }
+
+    consoleLog("info", "ePornLeak functionality test passed! Stream keys: " + Object.keys(metadata.m3u8Uris).join(", "));
+    return true;
   } catch (err) {
-    consoleLog("error", "ePornLeak test error: " + err.message);
+    consoleLog("error", "Functionality test error: " + err.message);
     return false;
   }
 }
@@ -1320,16 +1607,51 @@ async function runFunctionalityTest() {
 function parseExternalLink(uriString) {
   try {
     const str = String(uriString || "").trim();
-    const vidMatch = str.match(/\\/video\\/([^\\/\\?#]+)/i);
-    if (vidMatch) {
-      return new ExternalLinkParsed({ type: "videoPage", iD: vidMatch[1] });
+    if (!str) return new ExternalLinkParsed({ type: "unknown" });
+
+    const videoMatch = str.match(/\\/video\\/([^/?#]+)/i);
+    if (videoMatch) {
+      return new ExternalLinkParsed({
+        type: "videoPage",
+        iD: videoMatch[1],
+      });
     }
-    const modelMatch = str.match(/\\/model\\/([^\\/\\?#]+)/i);
+
+    const modelMatch = str.match(/\\/model\\/([^/?#]+)/i);
     if (modelMatch) {
-      return new ExternalLinkParsed({ type: "authorPage", iD: modelMatch[1] });
+      return new ExternalLinkParsed({
+        type: "authorPage",
+        iD: modelMatch[1],
+      });
     }
+
+    const searchMatch = str.match(/[?&]s=([^&#]+)/i);
+    if (searchMatch) {
+      const pageMatch = str.match(/[?&]page=(\\d+)/i);
+      return new ExternalLinkParsed({
+        type: "searchResultsPage",
+        searchRequest: new UniversalSearchRequest({
+          searchString: decodeURIComponent(searchMatch[1].replace(/\\+/g, " ")),
+        }),
+        pageCount: pageMatch ? Number.parseInt(pageMatch[1], 10) : 1,
+      });
+    }
+
+    const catTagMatch = str.match(/\\/(?:categories|tags)\\/([^/?#]+)/i);
+    if (catTagMatch) {
+      const pageMatch = str.match(/[?&]page=(\\d+)/i);
+      return new ExternalLinkParsed({
+        type: "searchResultsPage",
+        searchRequest: new UniversalSearchRequest({
+          searchString: decodeURIComponent(catTagMatch[1].replace(/-/g, " ")),
+        }),
+        pageCount: pageMatch ? Number.parseInt(pageMatch[1], 10) : 1,
+      });
+    }
+
     return new ExternalLinkParsed({ type: "unknown" });
-  } catch (e) {
+  } catch (err) {
+    consoleLog("error", "parseExternalLink error: " + err.message);
     return new ExternalLinkParsed({ type: "unknown" });
   }
 }
@@ -1337,10 +1659,13 @@ function parseExternalLink(uriString) {
 async function getHomePage(page) {
   try {
     const pageNum = Number.parseInt(page || 1, 10);
-    const url = pageNum <= 1 ? "https://epornleak.com/" : "https://epornleak.com/page/" + pageNum + "/";
-    const res = await epornleakRequest(url);
-    if (getStatusCode(res) !== 200) return [];
-    return parseVideosFromHtml(res.body);
+    const url = pageNum <= 1 ? EPORNLEAK_BASE_URL + "/" : EPORNLEAK_BASE_URL + "/?page=" + pageNum;
+    const response = await epornleakRequest(url);
+    if (getStatusCode(response) !== 200) {
+      consoleLog("error", "getHomePage returned status " + getStatusCode(response));
+      return [];
+    }
+    return parseVideosFromHtml(response.body);
   } catch (err) {
     consoleLog("error", "getHomePage error: " + err.message);
     return [];
@@ -1348,17 +1673,40 @@ async function getHomePage(page) {
 }
 
 async function getSearchSuggestions(searchString) {
-  return [];
+  try {
+    const q = String(searchString || "").trim();
+    if (!q) return [];
+    const response = await epornleakRequest(EPORNLEAK_BASE_URL + "/suggest?s=" + encodeURIComponent(q), {
+      "Accept": "application/json, text/javascript, */*; q=0.01",
+      "X-Requested-With": "XMLHttpRequest",
+    });
+    if (getStatusCode(response) !== 200 || !response.body) return [];
+    const data = JSON.parse(response.body);
+    if (data && Array.isArray(data.suggestions)) {
+      return data.suggestions
+        .map((item) => (item && item.value ? String(item.value).trim() : ""))
+        .filter(Boolean);
+    }
+    return [];
+  } catch (_) {
+    return [];
+  }
 }
 
 async function getSearchResults(request, page) {
   try {
-    const query = request?.searchString || "";
     const pageNum = Number.parseInt(page || 1, 10);
-    const url = "https://epornleak.com/page/" + pageNum + "/?s=" + encodeURIComponent(query);
-    const res = await epornleakRequest(url);
-    if (getStatusCode(res) !== 200) return [];
-    return parseVideosFromHtml(res.body);
+    const query = String(request?.searchString || "").trim();
+    const url = query
+      ? EPORNLEAK_BASE_URL + "/search?s=" + encodeURIComponent(query) + "&type=video&page=" + pageNum
+      : EPORNLEAK_BASE_URL + "/popular?page=" + pageNum;
+
+    const response = await epornleakRequest(url);
+    if (getStatusCode(response) !== 200) {
+      consoleLog("error", "getSearchResults returned status " + getStatusCode(response));
+      return [];
+    }
+    return parseVideosFromHtml(response.body);
   } catch (err) {
     consoleLog("error", "getSearchResults error: " + err.message);
     return [];
@@ -1366,55 +1714,130 @@ async function getSearchResults(request, page) {
 }
 
 function getVideoUriFromID(videoID) {
-  return "https://epornleak.com/video/" + videoID + "/";
+  const cleanId = String(videoID || "").trim().replace(/^\\/+|\\/+$/g, "");
+  return EPORNLEAK_BASE_URL + "/video/" + cleanId;
 }
 
 async function getVideoMetadata(videoId, uvp) {
   try {
     const url = getVideoUriFromID(videoId);
-    const res = await epornleakRequest(url);
-    if (getStatusCode(res) !== 200) return null;
-    const html = res.body;
-
-    const titleMatch = html.match(/<h1[^>]*>([\\s\\S]*?)<\\/h1>/i) || html.match(/<title>([\\s\\S]*?)<\\/title>/i);
-    const title = titleMatch ? cleanText(titleMatch[1]) : (uvp?.title || "Video " + videoId);
-
-    // Multi-Server Handling: ePornLeak and aggregator sites embed videos across multiple servers/iframes (Doodstream, Voe, Filemoon, Streamwish).
-    // We parse iframe sources and direct video tags, mapping them to numeric resolution keys ("1080", "720").
-    const m3u8Uris = {};
-
-    const sourceTagMatch = html.match(/<source\\s+[^>]*?src="([^"]+\\.(?:m3u8|mp4)[^"]*)"/i);
-    if (sourceTagMatch && sourceTagMatch[1]) {
-      m3u8Uris["1080"] = sourceTagMatch[1];
+    const response = await epornleakRequest(url);
+    if (getStatusCode(response) !== 200) {
+      consoleLog("error", "getVideoMetadata returned status " + getStatusCode(response) + " for " + videoId);
+      return null;
     }
 
-    const iframeRegex = /<iframe\\s+[^>]*?src="([^"]+)"[^>]*><\\/iframe>/gi;
-    let iframeMatch;
-    let serverIndex = 1;
-    while ((iframeMatch = iframeRegex.exec(html)) !== null) {
-      const embedUrl = iframeMatch[1];
-      if (embedUrl && !embedUrl.includes("ads") && !embedUrl.includes("banner")) {
-        const qualityKey = serverIndex === 1 && !m3u8Uris["1080"] ? "1080" : "720";
-        m3u8Uris[qualityKey] = embedUrl;
-        serverIndex++;
+    const html = response.body;
+
+    const titleMatch =
+      html.match(/<h1[^>]*class="[^"]*pages-view-video-video-title[^"]*"[^>]*>([\\s\\S]*?)<\\/h1>/i) ||
+      html.match(/<h1[^>]*>([\\s\\S]*?)<\\/h1>/i) ||
+      html.match(/<meta\\s+property="og:title"\\s+content="([^"]+)"/i);
+    const title = titleMatch ? cleanText(titleMatch[1]) : (uvp?.title || "Video " + videoId);
+
+    const m3u8Uris = {};
+    const dataSourceMatch = html.match(/id="player-wrap"[^>]*?data-source="([^"]+)"/i)
+      || html.match(/data-source="([^"]+)"/i);
+    if (dataSourceMatch && dataSourceMatch[1]) {
+      const decodedUrl = decodePlayerDataSource(dataSourceMatch[1], html);
+      if (decodedUrl) {
+        m3u8Uris["1080"] = decodedUrl;
       }
     }
 
     if (Object.keys(m3u8Uris).length === 0) {
-      m3u8Uris["1080"] = url;
+      const sourceMatch = html.match(/<source\\s+[^>]*?src="([^"]+\\.(?:m3u8|mp4)[^"]*)"/i);
+      if (sourceMatch && sourceMatch[1]) {
+        m3u8Uris["1080"] = sourceMatch[1];
+      }
     }
 
-    const thumbMatch = html.match(/<meta\\s+property="og:image"\\s+content="([^"]+)"/i);
-    const thumbnail = thumbMatch ? normalizeImageUrl(thumbMatch[1]) : (uvp?.thumbnail || "https://epornleak.com/images/favicon/favicon-64x64.png");
+    if (Object.keys(m3u8Uris).length === 0) {
+      const iframeRegex = /<iframe\\s+[^>]*?src="([^"]+)"[^>]*>/gi;
+      let iframeMatch;
+      const qualities = ["1080", "720", "480", "360"];
+      let idx = 0;
+      while ((iframeMatch = iframeRegex.exec(html)) !== null && idx < qualities.length) {
+        const embedUrl = iframeMatch[1];
+        if (embedUrl && !/nelvoroq|ads|twinrdengine|banner/i.test(embedUrl)) {
+          m3u8Uris[qualities[idx++]] = embedUrl;
+        }
+      }
+    }
+
+    if (Object.keys(m3u8Uris).length === 0) {
+      consoleLog("warning", "No playable stream extracted for ePornLeak video " + videoId);
+    }
+
+    const thumbMatch =
+      html.match(/class="video-poster"\\s+[^>]*?src="([^"]+)"/i) ||
+      html.match(/<meta\\s+property="og:image"\\s+content="([^"]+)"/i);
+    const thumbnail = normalizeImageUrl(thumbMatch ? thumbMatch[1] : (uvp?.thumbnail || "")) || EPORNLEAK_DEFAULT_ICON;
+
+    const creatorMatch = html.match(/<a\\s+class="pv-sheet-creator"\\s+href="[^"]*\\/model\\/([^"\\/?#]+)"/i);
+    const creatorNameMatch = html.match(/id="pv-sheet-name"[^>]*>([\\s\\S]*?)<\\/span>/i);
+    const creatorAvatarMatch = html.match(/class="pv-sheet-avatar"[^>]*>[\\s\\S]*?<img\\s+[^>]*?src="([^"]+)"/i);
+
+    const safeAuthorID = (creatorMatch ? creatorMatch[1] : null) || uvp?.authorID || "epornleak";
+    const safeAuthorName = (creatorNameMatch ? cleanText(creatorNameMatch[1]) : null) || uvp?.authorName || "ePornLeak";
+    const authorAvatar = normalizeImageUrl(creatorAvatarMatch ? creatorAvatarMatch[1] : "") || thumbnail || EPORNLEAK_DEFAULT_ICON;
+
+    const descMatch = html.match(/<p\\s+id="post-description"[^>]*>([\\s\\S]*?)<\\/p>/i);
+    const description = descMatch ? cleanText(descMatch[1]) : null;
+
+    const viewsMatch = html.match(/class="pages-view-video-views"[^>]*>[\\s\\S]*?<span>([^<]+)<\\/span>/i);
+    const viewsTotal = viewsMatch ? parseCompactCount(viewsMatch[1]) : (uvp?.viewsTotal ?? null);
+
+    const durationMatch = html.match(/class="pages-view-video-length"[^>]*>[\\s\\S]*?<span>([^<]+)<\\/span>/i);
+    const duration = durationMatch ? parseDuration(durationMatch[1]) : (uvp?.duration ?? null);
+
+    const timeMatch = html.match(/<time\\s+datetime="([^"]+)"/i);
+    const uploadDate = parseDateSafe(timeMatch ? timeMatch[1] : null);
+
+    const categories = [];
+    const catRegex = /<li\\s+class="is-category">\\s*<a[^>]*><span>([^<]+)<\\/span>/gi;
+    let catM;
+    while ((catM = catRegex.exec(html)) !== null) {
+      const val = cleanText(catM[1]);
+      if (val && !categories.includes(val)) categories.push(val);
+    }
+
+    const tags = [];
+    const tagRegex = /<li>\\s*<a\\s+href="[^"]*\\/tags\\/[^"]+"\\s+rel="tag"><span>([^<]+)<\\/span>/gi;
+    let tagM;
+    while ((tagM = tagRegex.exec(html)) !== null) {
+      const val = cleanText(tagM[1]);
+      if (val && !tags.includes(val)) tags.push(val);
+    }
 
     return new UniversalVideoMetadata({
       iD: videoId,
       m3u8Uris,
+      playbackHttpHeaders: {
+        "Referer": EPORNLEAK_BASE_URL + "/",
+        "User-Agent": EPORNLEAK_USER_AGENT,
+      },
       title,
-      authorID: uvp?.authorID || "epornleak",
-      authorName: uvp?.authorName || "ePornLeak",
-      authorAvatar: thumbnail,
-      universalVideoPreview: uvp || new UniversalVideoPreview({ iD: videoId, title, thumbnail }),
+      authorID: safeAuthorID,
+      authorName: safeAuthorName,
+      authorAvatar,
+      description,
+      viewsTotal,
+      tags,
+      categories,
+      uploadDate,
+      rawHtml: html,
+      universalVideoPreview: uvp || new UniversalVideoPreview({
+        iD: videoId,
+        title,
+        thumbnail,
+        duration,
+        viewsTotal,
+        maxQuality: 1080,
+        authorID: safeAuthorID,
+        authorName: safeAuthorName,
+        verifiedAuthor: true,
+      }),
     });
   } catch (err) {
     consoleLog("error", "getVideoMetadata error: " + err.message);
@@ -1423,54 +1846,978 @@ async function getVideoMetadata(videoId, uvp) {
 }
 
 async function getVideoSuggestions(videoID, rawHtml, page) {
-  return [];
-}
-
-function getAuthorUriFromID(authorID) {
-  return "https://epornleak.com/model/" + authorID + "/";
-}
-
-async function getAuthorPage(authorID) {
-  return new UniversalAuthorPage({
-    iD: authorID,
-    authorID,
-    name: authorID,
-    avatar: "https://epornleak.com/images/favicon/favicon-64x64.png",
-    verified: true,
-  });
-}
-
-async function getAuthorVideos(authorID, rawHtmlOrPage, maybePage) {
   try {
-    const pageNum = Number.parseInt(maybePage || rawHtmlOrPage || 1, 10);
-    const url = "https://epornleak.com/model/" + encodeURIComponent(authorID) + "/page/" + pageNum + "/";
-    const res = await epornleakRequest(url);
-    if (getStatusCode(res) !== 200) return [];
-    return parseVideosFromHtml(res.body);
+    if (Number(page) > 0) return [];
+    let html = rawHtml;
+    if (!html) {
+      const response = await epornleakRequest(getVideoUriFromID(videoID));
+      if (getStatusCode(response) !== 200) return [];
+      html = response.body;
+    }
+
+    const relIdx = html.indexOf("list_videos_random_videos_items");
+    const sectionHtml = relIdx >= 0 ? html.slice(relIdx) : html;
+    return parseVideosFromHtml(sectionHtml).filter((v) => v.iD !== videoID);
   } catch (err) {
+    consoleLog("warning", "getVideoSuggestions error: " + err.message);
     return [];
   }
 }
 
-async function downloadThumbnail(uri, headers) {
+function getAuthorUriFromID(authorID) {
+  const cleanId = String(authorID || "").trim().replace(/^\\/+|\\/+$/g, "");
+  if (!cleanId || cleanId === "epornleak") {
+    return EPORNLEAK_BASE_URL + "/";
+  }
+  return EPORNLEAK_BASE_URL + "/model/" + encodeURIComponent(cleanId);
+}
+
+async function getAuthorPage(authorID) {
+  try {
+    const cleanId = String(authorID || "").trim() || "epornleak";
+    if (cleanId === "epornleak") {
+      return new UniversalAuthorPage({
+        iD: "epornleak",
+        authorID: "epornleak",
+        name: "ePornLeak",
+        avatar: EPORNLEAK_DEFAULT_ICON,
+        verified: true,
+        rawHtml: "",
+      });
+    }
+
+    const url = getAuthorUriFromID(cleanId);
+    const response = await epornleakRequest(url);
+    if (getStatusCode(response) !== 200) {
+      consoleLog("error", "getAuthorPage returned status " + getStatusCode(response) + " for " + cleanId);
+      return null;
+    }
+
+    const html = response.body || "";
+    const nameMatch = html.match(/class="[^"]*blocks-model-view-name[^"]*"[^>]*>([\\s\\S]*?)<\\/p>/i);
+    const name = nameMatch ? cleanText(nameMatch[1]) : cleanId;
+
+    const avatarMatch =
+      html.match(/blocks-model-view-neighbor-current[\\s\\S]*?<img\\s+src="([^"]+)"/i) ||
+      html.match(/<meta\\s+property="og:image"\\s+content="([^"]+)"/i);
+    const avatar = normalizeImageUrl(avatarMatch ? avatarMatch[1] : "") || EPORNLEAK_DEFAULT_ICON;
+
+    const statsMatch = html.match(/blocks-model-view-stats-value">([\\d,]+)<\\/div>\\s*<div[^>]*>Videos<\\/div>/i);
+    const videoCount = statsMatch ? parseCompactCount(statsMatch[1]) : null;
+
+    return new UniversalAuthorPage({
+      iD: cleanId,
+      authorID: cleanId,
+      name,
+      avatar,
+      videosTotal: videoCount,
+      videoCount,
+      verified: true,
+      rawHtml: html,
+    });
+  } catch (err) {
+    consoleLog("error", "getAuthorPage error: " + err.message);
+    return null;
+  }
+}
+
+async function getAuthorVideos(authorID, rawHtmlOrPage, maybePage) {
+  try {
+    let pageNum = 1;
+    if (typeof maybePage !== "undefined") {
+      pageNum = Number.parseInt(maybePage || 1, 10);
+    } else {
+      pageNum = Number.parseInt(rawHtmlOrPage || 1, 10);
+    }
+    if (Number.isNaN(pageNum) || pageNum < 1) pageNum = 1;
+
+    const cleanId = String(authorID || "").trim() || "epornleak";
+    const base = getAuthorUriFromID(cleanId);
+    const url = pageNum <= 1 ? base : base + "?page=" + pageNum;
+
+    const response = await epornleakRequest(url);
+    if (getStatusCode(response) !== 200) return [];
+    return parseVideosFromHtml(response.body);
+  } catch (err) {
+    consoleLog("error", "getAuthorVideos error: " + err.message);
+    return [];
+  }
+}
+
+async function downloadThumbnail(uri, thumbnailHttpHeaders) {
   const isLegacy = epornleakSession.isLegacyBase64Host !== false;
   try {
     if (!uri) return isLegacy ? "" : [];
-    const response = await epornleakRequest(uri, headers || {}, { binary: true });
+    const response = await epornleakRequest(uri, thumbnailHttpHeaders || {}, { binary: true });
     if (getStatusCode(response) === 200) {
       if (response.isLegacyBase64Host) {
         return response.rawBodyBase64 || "";
       }
-      return Array.isArray(response.bodyBytes) ? response.bodyBytes : [];
+      if (Array.isArray(response.bodyBytes)) {
+        return response.bodyBytes;
+      }
+      return [];
     }
+    consoleLog("warning", "downloadThumbnail failed with status " + getStatusCode(response) + " for " + uri);
     return response.isLegacyBase64Host ? "" : [];
   } catch (err) {
+    consoleLog("warning", "downloadThumbnail error: " + err.message);
     return isLegacy ? "" : [];
   }
 }
+
 function cancelGetProgressThumbnails() {}
-async function getProgressThumbnails(videoID, rawHtml) { return []; }
-async function getComments(videoID, rawHtml, page) { return []; }`,
+
+async function getProgressThumbnails(videoID, rawHtml) {
+  return [];
+}
+
+async function getComments(videoID, rawHtml, page) {
+  return [];
+}`,
+    wrapper: xvideosPluginDef.sourceFiles.wrapper,
+  },
+};
+
+export const xxxparodyhdPluginDef: PluginDefinition = {
+  id: 'xxxparodyhd',
+  name: 'XXXParodyHD',
+  codeName: 'com.hedonhaven.xxxparodyhd',
+  version: 'v0.1.0',
+  serviceUrl: 'https://xxxparodyhd.net',
+  description: 'XXXParodyHD provider plugin for Hedon Haven featuring multi-server embed resolution (LuluStream HLS, MixDrop MP4, VOE, DoodStream), studios, pornstars, and search.',
+  yamlContent: `apiVersion: 1.0
+metadata:
+  codeName: "com.hedonhaven.xxxparodyhd"
+  prettyName: "XXXParodyHD"
+  version: v0.1.0
+  developer: "Hedon Haven Community"
+  contactEmail: "contact@hedon-haven.top"
+  issueTrackerUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/issues"
+  description: "XXXParodyHD provider plugin for Hedon Haven with multi-server stream extraction (LuluStream HLS, MixDrop MP4, VOE, DoodStream), studios, pornstars, and search."
+  updateUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/releases/latest/download/update.yaml"
+providerData:
+  iconUrl: "https://xxxparodyhd.net/wp-content/uploads/spt-brand/icon-192-da7c422f.png"
+  serviceUrl: "https://xxxparodyhd.net"
+  handleUrls:
+    - "https://xxxparodyhd.net/"
+    - "https://xxxparodyhd.net/movies/"
+    - "https://xxxparodyhd.net/director/"
+    - "https://xxxparodyhd.net/pornstar/"
+    - "https://xxxparodyhd.net/search/"
+initialPageCounts:
+  initialHomePage: 1
+  initialSearchResultsPage: 1
+  initialCommentsPage: 0
+  initialVideoSuggestionsPage: 0
+  initialAuthorVideosPage: 1`,
+  updateYamlContent: `version: v0.1.0
+downloadUrl: "https://github.com/Hedon-Haven/3rd-party-plugin-examples/releases/latest/download/plugin.zip"
+sha256Sum: "calculate_on_release"
+changelog:
+  - Initial release of XXXParodyHD provider plugin for Hedon Haven
+  - Multi-server embed resolver supporting LuluStream (.m3u8), MixDrop (.mp4), StreamWish, VOE, and DoodStream
+  - Search via /search/<query>/ and autocomplete via TurboSearch REST API
+  - Full support for Studios (/director/) and Pornstars (/pornstar/) catalogs
+  - Dual-host compatibility for Hedon Haven v0.6.7 (Base64) and >=0.6.8 (bodyBytes)`,
+  sourceFiles: {
+    bridge: xvideosPluginDef.sourceFiles.bridge,
+    universal: xvideosPluginDef.sourceFiles.universal.replace('com.hedonhaven.xvideos', 'com.hedonhaven.xxxparodyhd'),
+    session: xvideosPluginDef.sourceFiles.session
+      .replace(/https:\/\/www\.xvideos\.com\//g, "https://xxxparodyhd.net/")
+      .replace(/xvideos/g, "xxxparodyhd")
+      .replace(/XVIDEOS/g, "XXXPARODYHD"),
+    main: `// XXXParodyHD Provider Plugin for Hedon Haven.
+// Features multi-server embed resolution (LuluStream HLS, MixDrop MP4, StreamWish, VOE, DoodStream).
+
+const PLUGIN_CODE_NAME = "com.hedonhaven.xxxparodyhd";
+const XXXPARODYHD_BASE_URL = "https://xxxparodyhd.net";
+const XXXPARODYHD_DEFAULT_ICON = "https://xxxparodyhd.net/wp-content/uploads/spt-brand/icon-192-da7c422f.png";
+
+function getStatusCode(response) {
+  if (!response) return 0;
+  return Number(response.statusCode ?? response.status ?? 0);
+}
+
+async function init() {
+  consoleLog("info", "XXXParodyHD plugin initialized successfully");
+  return true;
+}
+
+function cleanText(value) {
+  return String(value || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*38;/gi, "&")
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&#8211;|&ndash;/gi, "-")
+    .replace(/&#8212;|&mdash;/gi, "-")
+    .replace(/&#8217;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\\s+/g, " ")
+    .trim();
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&quot;/gi, '"')
+    .replace(/&amp;/gi, "&")
+    .replace(/&#0*39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
+function normalizeImageUrl(value) {
+  if (!value) return "";
+  let url = String(value).trim();
+  if (url.startsWith("//")) url = "https:" + url;
+  else if (url.startsWith("/")) url = XXXPARODYHD_BASE_URL + url;
+  return url;
+}
+
+function normalizeStreamUrl(value) {
+  if (!value) return "";
+  let url = String(value).trim().replace(/\\\\\\//g, "/");
+  if (url.startsWith("//")) url = "https:" + url;
+  return url;
+}
+
+function getOrigin(url) {
+  const m = String(url || "").match(/^(https?:\\/\\/[^\\/?#]+)/i);
+  return m ? m[1] : XXXPARODYHD_BASE_URL;
+}
+
+function parseDuration(value) {
+  const str = String(value || "").trim();
+  if (!str) return 0;
+
+  const iso = str.match(/^PT(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?$/i);
+  if (iso) {
+    return Number(iso[1] || 0) * 3600 + Number(iso[2] || 0) * 60 + Number(iso[3] || 0);
+  }
+
+  const colonMatch = str.match(/(\\d{1,2}):(\\d{2})(?::(\\d{2}))?/);
+  if (colonMatch) {
+    if (colonMatch[3]) {
+      return Number(colonMatch[1]) * 3600 + Number(colonMatch[2]) * 60 + Number(colonMatch[3]);
+    }
+    return Number(colonMatch[1]) * 60 + Number(colonMatch[2]);
+  }
+
+  let totalSecs = 0;
+  const hMatch = str.match(/(\\d+)\\s*(?:h|hr|hours?)/i);
+  const mMatch = str.match(/(\\d+)\\s*(?:min|mins?|m)/i);
+  const sMatch = str.match(/(\\d+)\\s*(?:sec|secs?|s)/i);
+  if (hMatch) totalSecs += Number(hMatch[1]) * 3600;
+  if (mMatch) totalSecs += Number(mMatch[1]) * 60;
+  if (sMatch) totalSecs += Number(sMatch[1]);
+  return totalSecs;
+}
+
+function parseCompactCount(value) {
+  const str = String(value || "").trim().replace(/,/g, "");
+  if (!str) return 0;
+  const match = str.match(/^(\\d+(?:\\.\\d+)?)\\s*([KMBkmb])?/);
+  if (!match) {
+    return Number.parseInt(str.replace(/[^\\d]/g, ""), 10) || 0;
+  }
+  const num = Number.parseFloat(match[1]);
+  const suffix = (match[2] || "").toUpperCase();
+  if (suffix === "K") return Math.round(num * 1000);
+  if (suffix === "M") return Math.round(num * 1000000);
+  if (suffix === "B") return Math.round(num * 1000000000);
+  return Math.round(num);
+}
+
+function extractMovieSlugFromUrl(url) {
+  if (!url) return "";
+  const clean = String(url).split("?")[0].split("#")[0].replace(/\\/+$/, "");
+  const m = clean.match(/xxxparodyhd\\.net\\/([^\\/]+)$/i) || clean.match(/\\/([^\\/]+)$/);
+  if (!m) return "";
+  const slug = m[1];
+  if (["movies", "most-viewed", "most-rating", "parody-pornstars", "parody-studios", "parody-genres", "parody-years", "parody-directors", "parody-a-z"].includes(slug)) {
+    return "";
+  }
+  return slug;
+}
+
+function parseVideosFromHtml(htmlBody) {
+  const text = String(htmlBody || "");
+  const videos = [];
+  const seen = new Set();
+
+  const cardParts = text.split(/<article\\s+class="card">/i);
+  for (let i = 1; i < cardParts.length; i++) {
+    const chunk = cardParts[i].split(/<\\/article>/i)[0];
+
+    const linkMatch =
+      chunk.match(/<h3\\s+class="card__t"[^>]*>\\s*<a\\s+href="([^"]+)"[^>]*>([\\s\\S]*?)<\\/a>/i) ||
+      chunk.match(/<a\\s+class="card__th"\\s+href="([^"]+)"/i);
+    if (!linkMatch) continue;
+
+    const id = extractMovieSlugFromUrl(linkMatch[1]);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+
+    const altMatch = chunk.match(/alt="(?:Watch\\s+)?([^"]+?)(?:\\s+Porn Online Free)?"/i);
+    const title = linkMatch[2] ? cleanText(linkMatch[2]) : (altMatch ? cleanText(altMatch[1]) : "Movie " + id);
+
+    const thumbMatch = chunk.match(/<img\\s+[^>]*?src="([^"]+)"/i);
+    const thumbnail = normalizeImageUrl(thumbMatch ? thumbMatch[1] : "") || XXXPARODYHD_DEFAULT_ICON;
+
+    const durMatch = chunk.match(/<span\\s+class="card__dur"[^>]*>([^<]+)<\\/span>/i);
+    const duration = durMatch ? parseDuration(durMatch[1]) : null;
+
+    const viewsMatch = chunk.match(/<span\\s+class="m-v"[^>]*>[\\s\\S]*?<\\/svg>\\s*([\\d,KMBkmb\\.]+)/i);
+    const viewsTotal = viewsMatch ? parseCompactCount(viewsMatch[1]) : null;
+
+    const dirMatch = chunk.match(/<a\\s+class="card__tx"\\s+href="[^"]*\\/(director|pornstar)\\/([^"\\/?#]+)\\/"(?:\\s+title="([^"]*)")?/i);
+    const byMatch = chunk.match(/<span\\s+class="card__by"[^>]*>([^<]+)<\\/span>/i);
+    const authorID = dirMatch ? dirMatch[1] + "/" + dirMatch[2] : "xxxparodyhd";
+    const authorName = dirMatch
+      ? cleanText(dirMatch[3] || dirMatch[2])
+      : (byMatch ? cleanText(byMatch[1]) : "XXXParodyHD");
+
+    const qMatch = chunk.match(/<span\\s+class="card__q"[^>]*>([^<]+)<\\/span>/i);
+    const maxQuality = qMatch && /4K/i.test(qMatch[1]) ? 2160 : 1080;
+
+    videos.push(
+      new UniversalVideoPreview({
+        iD: id,
+        title,
+        thumbnail,
+        duration,
+        viewsTotal,
+        maxQuality,
+        authorID,
+        authorName,
+        verifiedAuthor: authorID !== "xxxparodyhd",
+      })
+    );
+  }
+
+  return videos;
+}
+
+function unpackPackerScripts(html) {
+  const results = [];
+  const source = String(html || "");
+  let idx = 0;
+
+  while ((idx = source.indexOf("eval(function(p,a,c,k,e,", idx)) !== -1) {
+    let depth = 0;
+    let i = idx + 4;
+    let inStr = null;
+    let esc = false;
+
+    for (; i < source.length; i++) {
+      const ch = source[i];
+      if (esc) {
+        esc = false;
+        continue;
+      }
+      if (ch === "\\\\") {
+        esc = true;
+        continue;
+      }
+      if (inStr) {
+        if (ch === inStr) inStr = null;
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === "\`") {
+        inStr = ch;
+        continue;
+      }
+      if (ch === "(") depth++;
+      else if (ch === ")") {
+        depth--;
+        if (depth === 0) {
+          i++;
+          break;
+        }
+      }
+    }
+
+    const callExpr = source.slice(idx, i);
+    if (callExpr.startsWith("eval(")) {
+      try {
+        const rewritten = "__capture(" + callExpr.slice(5);
+        let captured = "";
+        const runner = new Function("__capture", rewritten);
+        runner((code) => {
+          captured = String(code || "");
+          return captured;
+        });
+        if (captured) results.push(captured);
+      } catch (err) {
+        consoleLog("warning", "Packer unpack skipped: " + err.message);
+      }
+    }
+    idx = i;
+  }
+
+  return results;
+}
+
+async function resolveEmbedServer(server) {
+  const url = normalizeStreamUrl(server?.u || "");
+  const label = String(server?.l || server?.x || "Server").trim();
+  const slug = String(server?.x || label || "").toLowerCase();
+  if (!url) return null;
+
+  try {
+    const origin = getOrigin(url);
+    const res = await xxxparodyhdRequest(url, {
+      "Referer": XXXPARODYHD_BASE_URL + "/",
+    });
+    const status = getStatusCode(res);
+    if (status !== 200 || !res.body) {
+      consoleLog("warning", "Server " + label + " returned HTTP " + status);
+      return null;
+    }
+
+    const html = res.body;
+
+    if (slug.includes("voe") || /voe\\.sx/i.test(url)) {
+      const redirMatch = html.match(/window\\.location\\.href\\s*=\\s*['"](https?:\\/\\/[^'"]+)['"]/i);
+      if (redirMatch && redirMatch[1]) {
+        const redirRes = await xxxparodyhdRequest(redirMatch[1], { "Referer": url });
+        if (getStatusCode(redirRes) === 200 && redirRes.body) {
+          const b64HlsMatch = redirRes.body.match(/['"]hls['"]\\s*:\\s*['"]([A-Za-z0-9+/=]{20,})['"]/i);
+          if (b64HlsMatch) {
+            const decoded = xxxparodyhdDecodeBase64Utf8(b64HlsMatch[1]);
+            if (/^https?:\\/\\//i.test(decoded)) {
+              return { url: decoded, referer: getOrigin(redirMatch[1]) + "/", label, kind: "m3u8" };
+            }
+          }
+          const directVoe = redirRes.body.match(/https?:\\/\\/[^"'\\s<>]+\\.m3u8[^"'\\s<>]*/i);
+          if (directVoe) {
+            return { url: directVoe[0], referer: getOrigin(redirMatch[1]) + "/", label, kind: "m3u8" };
+          }
+        }
+      }
+    }
+
+    const unpacked = unpackPackerScripts(html);
+    const combined = unpacked.length > 0 ? unpacked.join("\\n") + "\\n" + html : html;
+
+    const furlMatch = combined.match(/MDCore\\.furl\\s*=\\s*["']([^"']+)["']/i);
+    const wurlMatch = combined.match(/MDCore\\.wurl\\s*=\\s*["']([^"']+)["']/i);
+    const mdRaw = (furlMatch && furlMatch[1].trim()) || (wurlMatch && wurlMatch[1].trim()) || "";
+    if (mdRaw) {
+      const streamUrl = normalizeStreamUrl(mdRaw);
+      if (streamUrl.startsWith("http")) {
+        return { url: streamUrl, referer: origin + "/", label, kind: "mp4" };
+      }
+    }
+
+    const jwFileMatch =
+      combined.match(/sources\\s*:\\s*\\[\\s*\\{[^}]*?file\\s*:\\s*["'](https?:\\/\\/[^"']+)["']/i) ||
+      combined.match(/file\\s*:\\s*["'](https?:\\/\\/[^"']+\\.(?:m3u8|mp4)[^"']*)["']/i);
+    if (jwFileMatch && jwFileMatch[1]) {
+      const streamUrl = normalizeStreamUrl(jwFileMatch[1]);
+      return {
+        url: streamUrl,
+        referer: origin + "/",
+        label,
+        kind: streamUrl.includes(".m3u8") ? "m3u8" : "mp4",
+      };
+    }
+
+    const m3u8Match = combined.match(/https?:\\/\\/[^"'\\s<>\\\\]+\\.m3u8(?:[^"'\\s<>\\\\]*)/i);
+    if (m3u8Match && m3u8Match[0]) {
+      const streamUrl = normalizeStreamUrl(m3u8Match[0]);
+      return { url: streamUrl, referer: origin + "/", label, kind: "m3u8" };
+    }
+
+    const mp4Match = combined.match(/(?:https?:)?\\/\\/[^"'\\s<>\\\\]+\\.mp4(?:[^"'\\s<>\\\\]*)/i);
+    if (mp4Match && mp4Match[0] && !/banner|ads|promo|preview/i.test(mp4Match[0])) {
+      const streamUrl = normalizeStreamUrl(mp4Match[0]);
+      if (streamUrl.startsWith("http")) {
+        return { url: streamUrl, referer: origin + "/", label, kind: "mp4" };
+      }
+    }
+
+    const passMatch = html.match(/['"](\\/pass_md5\\/[^'"]+)['"]/i);
+    if (passMatch && passMatch[1]) {
+      const passUrl = origin + passMatch[1];
+      const passRes = await xxxparodyhdRequest(passUrl, { "Referer": url });
+      if (getStatusCode(passRes) === 200 && passRes.body && passRes.body.startsWith("http")) {
+        const token = passMatch[1].split("/").pop() || "token";
+        const suffix = "abcdefghij?token=" + token + "&expiry=" + Date.now();
+        return { url: passRes.body + suffix, referer: origin + "/", label, kind: "mp4" };
+      }
+    }
+
+    return null;
+  } catch (err) {
+    consoleLog("warning", "Server " + label + " resolve error: " + err.message);
+    return null;
+  }
+}
+
+function getServerPriority(server) {
+  const x = String(server?.x || server?.l || "").toLowerCase();
+  const u = String(server?.u || "").toLowerCase();
+  // Prefer direct .mp4 providers first (MixDrop, DoodStream) over HLS (.m3u8)
+  if (x.includes("mixdrop") || u.includes("mixdrop") || u.includes("mxdrop")) return 1;
+  if (x.includes("dood") || u.includes("playmogo")) return 2;
+  if (x.includes("lulu") || u.includes("lulu")) return 3;
+  if (x.includes("wish") || x.includes("filemoon") || x.includes("vidhide")) return 4;
+  if (x.includes("voe") || u.includes("voe")) return 5;
+  return 6;
+}
+
+async function resolveAllServers(servers) {
+  if (!Array.isArray(servers) || servers.length === 0) return [];
+  const sorted = [...servers].sort((a, b) => getServerPriority(a) - getServerPriority(b));
+
+  const primaryBatch = sorted.slice(0, 3);
+  const primaryResolved = (await Promise.all(primaryBatch.map(resolveEmbedServer))).filter(Boolean);
+  if (primaryResolved.length > 0) {
+    return primaryResolved;
+  }
+
+  const secondaryBatch = sorted.slice(3, 7);
+  if (secondaryBatch.length === 0) return [];
+  return (await Promise.all(secondaryBatch.map(resolveEmbedServer))).filter(Boolean);
+}
+
+async function runFunctionalityTest() {
+  consoleLog("info", "Starting XXXParodyHD plugin functionality test...");
+  try {
+    const homeResponse = await xxxparodyhdRequest(XXXPARODYHD_BASE_URL + "/");
+    if (getStatusCode(homeResponse) !== 200) {
+      consoleLog("error", "XXXParodyHD home returned status " + getStatusCode(homeResponse));
+      return false;
+    }
+
+    const videos = parseVideosFromHtml(homeResponse.body);
+    if (!videos || videos.length === 0) {
+      consoleLog("error", "No movies parsed from XXXParodyHD homepage");
+      return false;
+    }
+
+    const sample = videos[0];
+    const metadata = await getVideoMetadata(sample.iD, sample);
+    if (!metadata || !metadata.m3u8Uris || Object.keys(metadata.m3u8Uris).length === 0) {
+      consoleLog("error", "Failed to resolve stream servers for " + sample.iD);
+      return false;
+    }
+
+    consoleLog("info", "XXXParodyHD functionality test passed! Streams: " + Object.keys(metadata.m3u8Uris).join(", "));
+    return true;
+  } catch (err) {
+    consoleLog("error", "Functionality test error: " + err.message);
+    return false;
+  }
+}
+
+function parseExternalLink(uriString) {
+  try {
+    const str = String(uriString || "").trim();
+    if (!str) return new ExternalLinkParsed({ type: "unknown" });
+
+    const dirMatch = str.match(/\\/(director|pornstar)\\/([^\\/?#]+)/i);
+    if (dirMatch) {
+      return new ExternalLinkParsed({
+        type: "authorPage",
+        iD: dirMatch[1].toLowerCase() + "/" + dirMatch[2],
+      });
+    }
+
+    const searchMatch = str.match(/\\/search\\/([^\\/?#]+)/i) || str.match(/[?&]s=([^&#]+)/i);
+    if (searchMatch) {
+      const pageMatch = str.match(/\\/page\\/(\\d+)/i);
+      return new ExternalLinkParsed({
+        type: "searchResultsPage",
+        searchRequest: new UniversalSearchRequest({
+          searchString: decodeURIComponent(searchMatch[1].replace(/\\+/g, " ")),
+        }),
+        pageCount: pageMatch ? Number.parseInt(pageMatch[1], 10) : 1,
+      });
+    }
+
+    const genreMatch = str.match(/\\/(?:genre|category)\\/([^\\/?#]+)/i);
+    if (genreMatch) {
+      return new ExternalLinkParsed({
+        type: "searchResultsPage",
+        searchRequest: new UniversalSearchRequest({
+          searchString: decodeURIComponent(genreMatch[1].replace(/-/g, " ")),
+        }),
+        pageCount: 1,
+      });
+    }
+
+    const movieSlug = extractMovieSlugFromUrl(str);
+    if (movieSlug) {
+      return new ExternalLinkParsed({
+        type: "videoPage",
+        iD: movieSlug,
+      });
+    }
+
+    return new ExternalLinkParsed({ type: "unknown" });
+  } catch (err) {
+    consoleLog("error", "parseExternalLink error: " + err.message);
+    return new ExternalLinkParsed({ type: "unknown" });
+  }
+}
+
+async function getHomePage(page) {
+  try {
+    const pageNum = Number.parseInt(page || 1, 10);
+    const url = pageNum <= 1 ? XXXPARODYHD_BASE_URL + "/" : XXXPARODYHD_BASE_URL + "/page/" + pageNum + "/";
+    const response = await xxxparodyhdRequest(url);
+    if (getStatusCode(response) !== 200) {
+      consoleLog("error", "getHomePage returned status " + getStatusCode(response));
+      return [];
+    }
+    return parseVideosFromHtml(response.body);
+  } catch (err) {
+    consoleLog("error", "getHomePage error: " + err.message);
+    return [];
+  }
+}
+
+async function getSearchSuggestions(searchString) {
+  try {
+    const q = String(searchString || "").trim();
+    if (q.length < 2) return [];
+    const response = await xxxparodyhdRequest(
+      XXXPARODYHD_BASE_URL + "/wp-json/turbosearch/v1/suggest?q=" + encodeURIComponent(q),
+      { "Accept": "application/json" }
+    );
+    if (getStatusCode(response) !== 200 || !response.body) return [];
+    const data = JSON.parse(response.body);
+    if (data && Array.isArray(data.posts)) {
+      return data.posts
+        .map((p) => (p && p.title ? cleanText(p.title) : ""))
+        .filter(Boolean);
+    }
+    return [];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function getSearchResults(request, page) {
+  try {
+    const pageNum = Number.parseInt(page || 1, 10);
+    const query = String(request?.searchString || "").trim();
+    const url = query
+      ? (pageNum <= 1
+          ? XXXPARODYHD_BASE_URL + "/search/" + encodeURIComponent(query) + "/"
+          : XXXPARODYHD_BASE_URL + "/search/" + encodeURIComponent(query) + "/page/" + pageNum + "/")
+      : (pageNum <= 1
+          ? XXXPARODYHD_BASE_URL + "/most-viewed/"
+          : XXXPARODYHD_BASE_URL + "/most-viewed/page/" + pageNum + "/");
+
+    const response = await xxxparodyhdRequest(url);
+    if (getStatusCode(response) !== 200) {
+      consoleLog("error", "getSearchResults returned status " + getStatusCode(response));
+      return [];
+    }
+    return parseVideosFromHtml(response.body);
+  } catch (err) {
+    consoleLog("error", "getSearchResults error: " + err.message);
+    return [];
+  }
+}
+
+function getVideoUriFromID(videoID) {
+  const cleanId = String(videoID || "").trim().replace(/^\\/+|\\/+$/g, "");
+  return XXXPARODYHD_BASE_URL + "/" + cleanId + "/";
+}
+
+async function getVideoMetadata(videoId, uvp) {
+  try {
+    const url = getVideoUriFromID(videoId);
+    const response = await xxxparodyhdRequest(url);
+    if (getStatusCode(response) !== 200) {
+      consoleLog("error", "getVideoMetadata returned status " + getStatusCode(response) + " for " + videoId);
+      return null;
+    }
+
+    const html = response.body;
+
+    const titleMatch =
+      html.match(/<h1\\s+class="vid__t[^"]*"[^>]*>([\\s\\S]*?)<\\/h1>/i) ||
+      html.match(/<h1[^>]*>([\\s\\S]*?)<\\/h1>/i) ||
+      html.match(/<meta\\s+property="og:title"\\s+content="([^"]+)"/i);
+    const title = titleMatch
+      ? cleanText(titleMatch[1]).replace(/\\s*-\\s*XXX Parody$/i, "")
+      : (uvp?.title || "Movie " + videoId);
+
+    let servers = [];
+    const dsMatch = html.match(/data-servers="([^"]+)"/i);
+    if (dsMatch && dsMatch[1]) {
+      try {
+        const jsonText = decodeHtmlEntities(dsMatch[1]).replace(/\\\\\\//g, "/");
+        const parsed = JSON.parse(jsonText);
+        if (Array.isArray(parsed)) servers = parsed;
+      } catch (jsonErr) {
+        consoleLog("warning", "Failed to parse data-servers JSON: " + jsonErr.message);
+      }
+    }
+
+    const resolvedStreams = await resolveAllServers(servers);
+    const m3u8Uris = {};
+    const qualityKeys = ["1080", "720", "480", "360"];
+    const usedUrls = new Set();
+
+    // Prioritize direct .mp4 streams first; only use .m3u8 if no .mp4 resolved.
+    resolvedStreams.sort((a, b) => (a.kind === "mp4" ? 0 : 1) - (b.kind === "mp4" ? 0 : 1));
+    const mp4Streams = resolvedStreams.filter((s) => s && s.kind === "mp4" && s.url);
+    const preferredStreams = mp4Streams.length > 0 ? mp4Streams : resolvedStreams;
+
+    let qIdx = 0;
+    for (const st of preferredStreams) {
+      if (!st || !st.url || usedUrls.has(st.url) || qIdx >= qualityKeys.length) continue;
+      usedUrls.add(st.url);
+      m3u8Uris[qualityKeys[qIdx++]] = st.url;
+    }
+
+    const primaryStream = preferredStreams[0] || null;
+    const playbackHeaders = {
+      "User-Agent": XXXPARODYHD_USER_AGENT,
+    };
+    if (primaryStream && primaryStream.referer && !/mixdrop|mxcontent/i.test(primaryStream.url)) {
+      playbackHeaders["Referer"] = primaryStream.referer;
+    }
+
+    const thumbMatch =
+      html.match(/<meta\\s+property="og:image"\\s+content="([^"]+)"/i) ||
+      html.match(/<img\\s+class="card__img"\\s+[^>]*?src="([^"]+)"/i);
+    const thumbnail = normalizeImageUrl(thumbMatch ? thumbMatch[1] : (uvp?.thumbnail || "")) || XXXPARODYHD_DEFAULT_ICON;
+
+    const studioMatch = html.match(/<b>Studio<\\/b>[\\s\\S]*?<a\\s+class="chip"\\s+href="[^"]*\\/director\\/([^"\\/?#]+)\\/">([^<]+)<\\/a>/i);
+    const safeAuthorID = studioMatch ? "director/" + studioMatch[1] : (uvp?.authorID || "xxxparodyhd");
+    const safeAuthorName = studioMatch ? cleanText(studioMatch[2]) : (uvp?.authorName || "XXXParodyHD");
+    const authorAvatar = thumbnail || XXXPARODYHD_DEFAULT_ICON;
+
+    const actors = [];
+    const starSectionMatch = html.match(/<b>Pornstars<\\/b>([\\s\\S]*?)<\\/div>\\s*<\\/div>\\s*<\\/div>/i);
+    if (starSectionMatch) {
+      const starRegex = /<a\\s+class="chip\\s+chip--star"\\s+href="[^"]*\\/pornstar\\/([^"\\/?#]+)\\/">([^<]+)<\\/a>/gi;
+      let sm;
+      while ((sm = starRegex.exec(starSectionMatch[1])) !== null) {
+        actors.push({
+          name: cleanText(sm[2]),
+          authorID: "pornstar/" + sm[1],
+          avatar: authorAvatar,
+        });
+      }
+    }
+
+    const descMatch = html.match(/<div\\s+class="desc">([\\s\\S]*?)<\\/div>/i);
+    const description = descMatch ? cleanText(descMatch[1]) : null;
+
+    const viewsMatch = html.match(/data-views[^>]*>([\\d,KMBkmb\\.]+)</i);
+    const viewsTotal = viewsMatch ? parseCompactCount(viewsMatch[1]) : (uvp?.viewsTotal ?? null);
+
+    const durMatch = html.match(/st--duration"[^>]*>[\\s\\S]*?<\\/svg>([^<]+)<\\/span>/i);
+    const duration = durMatch ? parseDuration(durMatch[1]) : (uvp?.duration ?? null);
+
+    const dateMatch = html.match(/st--date"[^>]*>[\\s\\S]*?<time\\s+datetime="([^"]+)"/i);
+    let uploadDate = null;
+    if (dateMatch && dateMatch[1]) {
+      const d = new Date(dateMatch[1]);
+      if (!Number.isNaN(d.getTime())) uploadDate = d;
+    }
+
+    const categories = [];
+    const tags = [];
+    const genreRegex = /<a\\s+class="chip"\\s+href="[^"]*\\/genre\\/[^"]+">([^<]+)<\\/a>/gi;
+    let gm;
+    while ((gm = genreRegex.exec(html)) !== null) {
+      const val = cleanText(gm[1]);
+      if (val && !tags.includes(val)) tags.push(val);
+    }
+    const catRegex = /<a\\s+class="chip"\\s+href="[^"]*\\/category\\/[^"]+">([^<]+)<\\/a>/gi;
+    let cm;
+    while ((cm = catRegex.exec(html)) !== null) {
+      const val = cleanText(cm[1]);
+      if (val && !categories.includes(val)) categories.push(val);
+    }
+    if (categories.length === 0 && tags.length > 0) {
+      categories.push(...tags.slice(0, 4));
+    }
+
+    return new UniversalVideoMetadata({
+      iD: videoId,
+      m3u8Uris,
+      playbackHttpHeaders: playbackHeaders,
+      title,
+      authorID: safeAuthorID,
+      authorName: safeAuthorName,
+      authorAvatar,
+      actors: actors.length > 0 ? actors : null,
+      description,
+      viewsTotal,
+      tags,
+      categories,
+      uploadDate,
+      rawHtml: html,
+      universalVideoPreview: uvp || new UniversalVideoPreview({
+        iD: videoId,
+        title,
+        thumbnail,
+        duration,
+        viewsTotal,
+        maxQuality: 1080,
+        authorID: safeAuthorID,
+        authorName: safeAuthorName,
+        verifiedAuthor: safeAuthorID !== "xxxparodyhd",
+      }),
+    });
+  } catch (err) {
+    consoleLog("error", "getVideoMetadata error: " + err.message);
+    return null;
+  }
+}
+
+async function getVideoSuggestions(videoID, rawHtml, page) {
+  try {
+    if (Number(page) > 0) return [];
+    let html = rawHtml;
+    if (!html) {
+      const response = await xxxparodyhdRequest(getVideoUriFromID(videoID));
+      if (getStatusCode(response) !== 200) return [];
+      html = response.body;
+    }
+
+    const relIdx = html.indexOf("Related Movies");
+    const sectionHtml = relIdx >= 0 ? html.slice(relIdx) : html;
+    return parseVideosFromHtml(sectionHtml).filter((v) => v.iD !== videoID);
+  } catch (err) {
+    consoleLog("warning", "getVideoSuggestions error: " + err.message);
+    return [];
+  }
+}
+
+function getAuthorUriFromID(authorID) {
+  const cleanId = String(authorID || "").trim().replace(/^\\/+|\\/+$/g, "");
+  if (!cleanId || cleanId === "xxxparodyhd") {
+    return XXXPARODYHD_BASE_URL + "/";
+  }
+  if (cleanId.startsWith("director/") || cleanId.startsWith("pornstar/")) {
+    return XXXPARODYHD_BASE_URL + "/" + cleanId + "/";
+  }
+  return XXXPARODYHD_BASE_URL + "/director/" + encodeURIComponent(cleanId) + "/";
+}
+
+async function getAuthorPage(authorID) {
+  try {
+    const cleanId = String(authorID || "").trim() || "xxxparodyhd";
+    if (cleanId === "xxxparodyhd") {
+      return new UniversalAuthorPage({
+        iD: "xxxparodyhd",
+        authorID: "xxxparodyhd",
+        name: "XXXParodyHD",
+        avatar: XXXPARODYHD_DEFAULT_ICON,
+        verified: true,
+        rawHtml: "",
+      });
+    }
+
+    const url = getAuthorUriFromID(cleanId);
+    const response = await xxxparodyhdRequest(url);
+    if (getStatusCode(response) !== 200) {
+      consoleLog("error", "getAuthorPage returned status " + getStatusCode(response) + " for " + cleanId);
+      return null;
+    }
+
+    const html = response.body || "";
+    const h1Match = html.match(/<h1[^>]*>([\\s\\S]*?)<\\/h1>/i);
+    const name = h1Match ? cleanText(h1Match[1]).replace(/\\s+Parodies$|\\s+Parody Roles$/i, "") : cleanId;
+
+    const videos = parseVideosFromHtml(html);
+    const avatar = (videos[0] && videos[0].thumbnail) ? videos[0].thumbnail : XXXPARODYHD_DEFAULT_ICON;
+    const countMatch = html.match(/(\\d+)\\s*(?:movies|videos|parodies)/i);
+    const videosTotal = countMatch ? Number.parseInt(countMatch[1], 10) : (videos.length || null);
+
+    return new UniversalAuthorPage({
+      iD: cleanId,
+      authorID: cleanId,
+      name,
+      avatar,
+      banner: videos[1]?.thumbnail || avatar,
+      videosTotal,
+      videoCount: videosTotal,
+      verified: true,
+      rawHtml: html,
+    });
+  } catch (err) {
+    consoleLog("error", "getAuthorPage error: " + err.message);
+    return null;
+  }
+}
+
+async function getAuthorVideos(authorID, rawHtmlOrPage, maybePage) {
+  try {
+    let pageNum = 1;
+    let passedHtml = "";
+    if (typeof maybePage !== "undefined") {
+      pageNum = Number.parseInt(maybePage || 1, 10);
+      if (typeof rawHtmlOrPage === "string") passedHtml = rawHtmlOrPage;
+    } else {
+      pageNum = Number.parseInt(rawHtmlOrPage || 1, 10);
+    }
+    if (Number.isNaN(pageNum) || pageNum < 1) pageNum = 1;
+
+    if (pageNum <= 1 && passedHtml && passedHtml.includes("<article")) {
+      const parsed = parseVideosFromHtml(passedHtml);
+      if (parsed.length > 0) return parsed;
+    }
+
+    const cleanId = String(authorID || "").trim() || "xxxparodyhd";
+    const base = getAuthorUriFromID(cleanId);
+    const url = pageNum <= 1 ? base : base + "page/" + pageNum + "/";
+
+    const response = await xxxparodyhdRequest(url);
+    if (getStatusCode(response) !== 200) return [];
+    return parseVideosFromHtml(response.body);
+  } catch (err) {
+    consoleLog("error", "getAuthorVideos error: " + err.message);
+    return [];
+  }
+}
+
+async function downloadThumbnail(uri, thumbnailHttpHeaders) {
+  const isLegacy = xxxparodyhdSession.isLegacyBase64Host !== false;
+  try {
+    if (!uri) return isLegacy ? "" : [];
+    const response = await xxxparodyhdRequest(uri, thumbnailHttpHeaders || {}, { binary: true });
+    if (getStatusCode(response) === 200) {
+      if (response.isLegacyBase64Host) {
+        return response.rawBodyBase64 || "";
+      }
+      if (Array.isArray(response.bodyBytes)) {
+        return response.bodyBytes;
+      }
+      return [];
+    }
+    consoleLog("warning", "downloadThumbnail failed with status " + getStatusCode(response) + " for " + uri);
+    return response.isLegacyBase64Host ? "" : [];
+  } catch (err) {
+    consoleLog("warning", "downloadThumbnail error: " + err.message);
+    return isLegacy ? "" : [];
+  }
+}
+
+function cancelGetProgressThumbnails() {}
+
+async function getProgressThumbnails(videoID, rawHtml) {
+  return [];
+}
+
+async function getComments(videoID, rawHtml, page) {
+  return [];
+}`,
     wrapper: xvideosPluginDef.sourceFiles.wrapper,
   },
 };
